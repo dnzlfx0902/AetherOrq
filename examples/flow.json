@@ -1,0 +1,23 @@
+{
+  "name": "demo",
+  "description": "Small self-contained flow: two independent tasks, then a dependent one.",
+  "tasks": [
+    {
+      "id": "greet",
+      "argv": ["python3", "-c", "print('hello from AetherOrq')"],
+      "timeout": 30
+    },
+    {
+      "id": "write_artifact",
+      "argv": ["python3", "-c", "import pathlib; pathlib.Path('demo-artifact.txt').write_text('built by AetherOrq\\n')"],
+      "timeout": 30,
+      "retries": 1
+    },
+    {
+      "id": "verify_artifact",
+      "argv": ["python3", "-c", "import pathlib, sys; sys.exit(0 if pathlib.Path('demo-artifact.txt').read_text().strip() else 1)"],
+      "depends_on": ["write_artifact"],
+      "timeout": 30
+    }
+  ]
+}
