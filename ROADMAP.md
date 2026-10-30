@@ -1,8 +1,10 @@
 # Roadmap
 
 Milestones, not calendar. Each one closes only when its acceptance is verifiable
-by running commands. **M1 onward waits for an explicit decision** after M0 is
-verified; nothing beyond M0 is committed.
+by running commands. Work runs as a continuous cycle over the agreed scope: the
+pause belongs at the **close of that whole agreed scope/release**, not after any
+single milestone (M0 included); nothing outside the agreed scope is committed
+without an explicit decision at that point.
 
 ## M0 — Kernel and persistence (this release)
 
@@ -15,7 +17,7 @@ contract.
 
 Acceptance (all runnable, all already passing):
 
-- `python3 -m unittest discover -s tests -v` → 14 tests, `OK`.
+- `python3 -m unittest discover -s tests -v` → 15 tests, `OK`.
 - A flow with a cycle exits `2`, prints the cycle, executes nothing, creates no db.
 - A failing task leaves `failed`; its descendants are `blocked`; independent
   branches still run; exit code `1`.
@@ -25,9 +27,10 @@ Acceptance (all runnable, all already passing):
   old attempt becomes `interrupted`, the task re-runs, nothing is reported as
   succeeded without exit code 0.
 - Re-running after a partial failure skips the completed tasks (asserted by a
-  side-effect log) and finishes the rest.
+  side-effect log) and finishes the rest — repeatedly: a third and fourth run
+  still execute nothing new.
 
-## M1 — Operator visibility (next, needs decision)
+## M1 — Operator visibility (next in the cycle)
 
 `aether logs --db DB --task ID` (tail of stored output) and `aether runs --db DB`
 (run history with status and timing), plus `--json` machine-readable output for

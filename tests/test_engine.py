@@ -236,6 +236,39 @@ class ResumeTests(FlowTestCase):
             [("a", "succeeded"), ("b", "failed"), ("a", "skipped"), ("b", "succeeded")],
         )
 
+    def test_resume_is_stable_across_repeated_runs(self):
+        """D1 regression: a `skipped` row must never hide the earlier success.
+
+        Four consecutive runs of the same flow: exactly one real execution per task,
+        no duplicated external effects, and every later run skips both tasks.
+        """
+        log = self.dir / "effects.log"
+        flow = self.write_flow(
+            [
+                {"id": "t1", "argv": py(f"open({str(log)!r},'a').write('t1')")},
+                {
+                    "id": "t2",
+                    "argv": py(f"open({str(log)!r},'a').write('t2')"),
+                    "depends_on": ["t1"],
+                },
+            ]
+        )
+        for run in range(1, 5):
+            res = self.run_flow(flow)
+            self.assertEqual(res.returncode, 0, f"run {run}: {res.stderr}")
+            self.assertEqual(
+                log.read_text(), "t1t2", f"run {run} repeated an external effect"
+            )
+            if run == 1:
+                self.assertIn("running  t1", res.stdout)
+            else:
+                self.assertIn("skipped  t1", res.stdout, f"run {run}")
+                self.assertIn("skipped  t2", res.stdout, f"run {run}")
+                self.assertNotIn("running  t1", res.stdout, f"run {run}")
+                self.assertNotIn("running  t2", res.stdout, f"run {run}")
+        executed = [(tid, s) for tid, s, _, _ in self.rows() if s != "skipped"]
+        self.assertEqual(executed, [("t1", "succeeded"), ("t2", "succeeded")])
+
     def test_flow_change_reruns_only_the_changed_command(self):
         log = self.dir / "log"
         flow = self.write_flow(

@@ -188,8 +188,12 @@ def recover(conn: sqlite3.Connection) -> int:
 
 
 def previous_status(conn, task_id: str, command_hash: str) -> str | None:
+    # A `skipped` row is not new evidence: it only records that this run reused an
+    # earlier success. Counting it as the newest status would hide that success and
+    # re-execute the task on every second run (D1). Skipped rows always point at a
+    # `succeeded` row with the same identity, so excluding them is lossless.
     row = conn.execute(
-        "SELECT status FROM task_runs WHERE task_id=? AND command_hash=? "
+        "SELECT status FROM task_runs WHERE task_id=? AND command_hash=? AND status<>'skipped' "
         "ORDER BY attempt_id DESC LIMIT 1",
         (task_id, command_hash),
     ).fetchone()

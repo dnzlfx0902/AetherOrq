@@ -73,7 +73,8 @@ state written.
 ## 5. Resume decision table
 
 For each task in topological order, with `prior` = status of the most recent
-attempt having the same `task_id` and `command_hash`:
+attempt having the same `task_id` and `command_hash` **whose status is not
+`skipped`**:
 
 | prior | condition | action |
 |---|---|---|
@@ -85,6 +86,12 @@ attempt having the same `task_id` and `command_hash`:
 
 The "most recent attempt" rule means: if a later attempt failed, an earlier
 success does not resurrect the task — the newest evidence wins.
+
+`skipped` rows are **not** evidence and are excluded from the lookup: a skipped
+row only restates that this run reused an earlier success, and every skipped row
+has a `succeeded` row with the same identity behind it. Counting it as the newest
+status would hide that success and re-execute the task on every other run, so
+repeated runs of an unchanged flow keep skipping indefinitely.
 
 ## 6. Interruption and recovery
 

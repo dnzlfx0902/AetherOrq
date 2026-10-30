@@ -87,8 +87,10 @@ and `task_runs` (one row per attempt, with status, exit code, attempts, stdout,
 stderr, timestamps; output truncated at 64 KiB per stream). WAL mode.
 
 Skip decisions use the last attempt for the same `task_id` **and** the same
-command hash (SHA-256 of the canonical `argv`). Changing a task's command makes
-it run again; changing an unrelated task does not. Changing an upstream command
+command hash (SHA-256 of the canonical `argv`), ignoring rows that only record a
+skip: an unchanged flow keeps skipping on the 3rd, 4th and every later run, not
+just the second. Changing a task's command makes it run again; changing an
+unrelated task does not. Changing an upstream command
 does **not** invalidate downstream tasks automatically — pass `--force-task` for
 that. Full contract, invariants and limits: [CONTRACT.md](CONTRACT.md).
 
@@ -110,17 +112,19 @@ secrets in flow files or in commands — they are stored in the SQLite database
 python3 -m unittest discover -s tests -v
 ```
 
-14 end-to-end tests. They drive the real CLI in subprocesses and inspect the
+15 end-to-end tests. They drive the real CLI in subprocesses and inspect the
 real database: cycle rejected before execution, unknown/duplicate ids, shell
 string rejected, dependency order, failure propagation, bounded retries,
-process-tree kill on timeout, resume without re-running completed tasks, flow
-change semantics, forced re-run, SIGKILL recovery, `status` output.
+process-tree kill on timeout, resume without re-running completed tasks across
+four consecutive runs, flow change semantics, forced re-run, SIGKILL recovery,
+`status` output.
 
 ## Roadmap
 
 Short, milestone-based, each with verifiable acceptance. Details in
-[ROADMAP.md](ROADMAP.md). M0 is this increment; M1 is next and **awaits a
-decision**.
+[ROADMAP.md](ROADMAP.md). M0 is this release; work then continues in the agreed
+cycle until the whole agreed scope is closed — the pause belongs at the end of
+that scope, not after M0.
 
 ## License
 
