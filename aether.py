@@ -345,25 +345,137 @@ def run_flow(flow: dict, db_path: str, force_tasks: set[str] | None = None) -> i
     return 1 if failed else 0
 
 
-def show_status(db_path: str) -> int:
+def _require_db(db_path: str) -> bool:
     if not Path(db_path).exists():
         print(f"no database at {db_path}", file=sys.stderr)
+        return False
+    return True
+
+
+def _emitted(row) -> dict:
+    keys = ("task_id", "status", "attempts", "exit_code", "started_at", "finished_at", "flow_name")
+    return dict(zip(keys, row))
+
+
+def show_status(db_path: str, as_json: bool = False) -> int:
+    if not _require_db(db_path):
         return 2
     conn = connect(db_path)
-    rows = conn.execute(
-        "SELECT t.task_id, t.status, t.attempts, t.exit_code, t.started_at, t.finished_at, r.flow_name "
-        "FROM task_runs t JOIN runs r ON r.run_id = t.run_id "
-        "WHERE t.attempt_id IN (SELECT MAX(attempt_id) FROM task_runs GROUP BY task_id) "
-        "ORDER BY t.task_id"
-    ).fetchall()
+    rows = [
+        _emitted(row)
+        for row in conn.execute(
+            "SELECT t.task_id, t.status, t.attempts, t.exit_code, t.started_at, t.finished_at, r.flow_name "
+            "FROM task_runs t JOIN runs r ON r.run_id = t.run_id "
+            "WHERE t.attempt_id IN (SELECT MAX(attempt_id) FROM task_runs GROUP BY task_id) "
+            "ORDER BY t.task_id"
+        ).fetchall()
+    ]
+    run_count = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+    conn.close()
+    if as_json:
+        print(json.dumps({"tasks": rows, "runs": run_count}, indent=2))
+        return 0
     if not rows:
         print("no attempts recorded")
         return 0
     print(f"{'task':<20} {'status':<11} {'tries':>5} {'exit':>4}  finished")
-    for task_id, status, attempts, code, started, finished, flow_name in rows:
-        print(f"{task_id:<20} {status:<11} {attempts:>5} {str(code):>4}  {finished or started}")
-    runs = conn.execute("SELECT COUNT(*), MAX(run_id) FROM runs").fetchone()
-    print(f"\nflow(s) in this db: {rows[0][6]!r}; runs: {runs[0]}")
+    for row in rows:
+        print(
+            f"{row['task_id']:<20} {row['status']:<11} {row['attempts']:>5} "
+            f"{str(row['exit_code']):>4}  {row['finished_at'] or row['started_at']}"
+        )
+    print(f"\nflow(s) in this db: {rows[0]['flow_name']!r}; runs: {run_count}")
+    return 0
+
+
+def show_runs(db_path: str, as_json: bool = False) -> int:
+    if not _require_db(db_path):
+        return 2
+    conn = connect(db_path)
+    rows = conn.execute(
+        "SELECT r.run_id, r.flow_name, r.status, r.started_at, r.finished_at, "
+        "COUNT(t.attempt_id), "
+        "COALESCE(SUM(t.status='succeeded'), 0), "
+        "COALESCE(SUM(t.status IN ('failed','timed_out','interrupted')), 0) "
+        "FROM runs r LEFT JOIN task_runs t ON t.run_id = r.run_id "
+        "GROUP BY r.run_id ORDER BY r.run_id"
+    ).fetchall()
+    conn.close()
+    runs = [
+        {
+            "run_id": run_id,
+            "flow_name": flow_name,
+            "status": status,
+            "started_at": started,
+            "finished_at": finished,
+            "duration_seconds": _seconds(started, finished),
+            "tasks": tasks,
+            "succeeded": ok,
+            "failed": bad,
+        }
+        for run_id, flow_name, status, started, finished, tasks, ok, bad in rows
+    ]
+    if as_json:
+        print(json.dumps({"runs": runs}, indent=2))
+        return 0
+    if not runs:
+        print("no runs recorded")
+        return 0
+    print(f"{'run':>4} {'status':<11} {'tasks':>5} {'ok':>3} {'fail':>4} {'secs':>7}  started")
+    for r in runs:
+        secs = "-" if r["duration_seconds"] is None else f"{r['duration_seconds']:.1f}"
+        print(
+            f"{r['run_id']:>4} {r['status']:<11} {r['tasks']:>5} {r['succeeded']:>3} "
+            f"{r['failed']:>4} {secs:>7}  {r['started_at']}  {r['flow_name']}"
+        )
+    return 0
+
+
+def _seconds(start: str | None, end: str | None) -> float | None:
+    if not start or not end:
+        return None
+    try:
+        return round((datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds(), 3)
+    except ValueError:
+        return None
+
+
+def _tail(text: str | None, lines: int) -> list[str]:
+    stored = (text or "").splitlines()
+    return stored[-lines:]
+
+
+def show_logs(db_path: str, task_id: str, lines: int) -> int:
+    """Tail of the most recent attempt that actually ran a process.
+
+    `skipped` and `blocked` rows never start a process and carry no output, so they
+    are not attempts for this purpose; the newest real attempt wins.
+    """
+    lines = max(1, lines)
+    if not _require_db(db_path):
+        return 2
+    conn = connect(db_path)
+    row = conn.execute(
+        "SELECT attempt_id, run_id, status, attempts, exit_code, started_at, finished_at, "
+        "stdout, stderr, error FROM task_runs "
+        "WHERE task_id=? AND status NOT IN ('skipped','blocked') "
+        "ORDER BY attempt_id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        print(f"no stored attempt for task {task_id!r}", file=sys.stderr)
+        return 2
+    attempt_id, run_id, status, attempts, code, started, finished, out, err, errmsg = row
+    print(
+        f"task {task_id}  run {run_id}  attempt #{attempt_id}  status {status}  "
+        f"tries {attempts}  exit {code}"
+    )
+    print(f"started {started or '-'}  finished {finished or '-'}" + (f"  error: {errmsg}" if errmsg else ""))
+    for name, text in (("stdout", out), ("stderr", err)):
+        print(f"--- {name} (last {lines} lines) ---" if text else f"--- {name}: empty ---")
+        for line in _tail(text, lines):
+            print(line)
     return 0
 
 
@@ -387,10 +499,24 @@ def main(argv: list[str] | None = None) -> int:
 
     p_status = sub.add_parser("status", help="show the last state of every task")
     p_status.add_argument("--db", required=True)
+    p_status.add_argument("--json", action="store_true", help="machine-readable output")
+
+    p_logs = sub.add_parser("logs", help="tail of the last stored attempt output for one task")
+    p_logs.add_argument("--db", required=True)
+    p_logs.add_argument("--task", required=True, metavar="ID")
+    p_logs.add_argument("--lines", type=int, default=40, help="tail length (default 40)")
+
+    p_runs = sub.add_parser("runs", help="run history with status and timing")
+    p_runs.add_argument("--db", required=True)
+    p_runs.add_argument("--json", action="store_true", help="machine-readable output")
 
     args = parser.parse_args(argv)
     if args.cmd == "status":
-        return show_status(args.db)
+        return show_status(args.db, args.json)
+    if args.cmd == "logs":
+        return show_logs(args.db, args.task, args.lines)
+    if args.cmd == "runs":
+        return show_runs(args.db, args.json)
     try:
         flow = load_flow(args.flow)
     except FlowError as exc:

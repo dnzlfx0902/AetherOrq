@@ -146,4 +146,4 @@ engine deliberately does not guess whether a downstream result is still valid.
 
 Parallel execution, sandboxing, secret management, remote execution, UI/TUI,
 AI/LLM integration, plugin system, scheduling, retries with backoff, per-task
-environment or working-directory configuration, `logs`/`inspect` subcommands.
+environment or working-directory configuration, `inspect` subcommands.

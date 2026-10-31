@@ -58,7 +58,15 @@ flow nothing is executed and no database is written (exit code `2`).
 python3 aether.py validate examples/flow.json
 python3 aether.py run examples/flow.json --db demo.db
 python3 aether.py status --db demo.db
+python3 aether.py logs --db demo.db --task write_artifact --lines 20
+python3 aether.py runs --db demo.db
+python3 aether.py status --db demo.db --json
 ```
+
+`status` and `runs` accept `--json`. `logs` prints the tail of the newest stored
+attempt (stdout and stderr, `--lines` default 40); `skipped`/`blocked` rows never
+ran a process and are not counted as attempts. `runs` lists each run with its
+status, task/failure counts and duration.
 
 `run` exit codes: `0` every task succeeded (or was already done), `1` at least
 one task failed/blocked, `2` invalid flow or unreadable file, `130` interrupted
@@ -112,12 +120,12 @@ secrets in flow files or in commands — they are stored in the SQLite database
 python3 -m unittest discover -s tests -v
 ```
 
-15 end-to-end tests. They drive the real CLI in subprocesses and inspect the
-real database: cycle rejected before execution, unknown/duplicate ids, shell
-string rejected, dependency order, failure propagation, bounded retries,
+21 end-to-end tests (M0's 15 plus M1's 6). They drive the real CLI in subprocesses
+and inspect the real database: cycle rejected before execution, unknown/duplicate
+ids, shell string rejected, dependency order, failure propagation, bounded retries,
 process-tree kill on timeout, resume without re-running completed tasks across
 four consecutive runs, flow change semantics, forced re-run, SIGKILL recovery,
-`status` output.
+`status` output, `logs` tail of the last attempt, `runs` history, `--json`.
 
 ## Roadmap
 
