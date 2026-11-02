@@ -89,7 +89,9 @@ stderr, timestamps; output truncated at 64 KiB per stream). WAL mode.
 Skip decisions use the last attempt for the same `task_id` **and** the same
 command hash (SHA-256 of the canonical `argv`), ignoring rows that only record a
 skip: an unchanged flow keeps skipping on the 3rd, 4th and every later run, not
-just the second. Changing a task's command makes it run again; changing an
+just the second. `status` applies the same rule, so it keeps reporting the real
+status and exit code of the attempt that actually ran, not the `skipped` row.
+Changing a task's command makes it run again; changing an
 unrelated task does not. Changing an upstream command
 does **not** invalidate downstream tasks automatically — pass `--force-task` for
 that. Full contract, invariants and limits: [CONTRACT.md](CONTRACT.md).

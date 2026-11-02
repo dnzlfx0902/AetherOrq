@@ -93,6 +93,11 @@ has a `succeeded` row with the same identity behind it. Counting it as the newes
 status would hide that success and re-execute the task on every other run, so
 repeated runs of an unchanged flow keep skipping indefinitely.
 
+`status` uses the same rule: it reports the newest row that is not `skipped`, so
+the operator keeps seeing the real status, exit code and timestamps of the
+attempt that ran. `blocked` is a real state (nothing ran in that run) and is
+reported as-is.
+
 ## 6. Interruption and recovery
 
 - Engine killed (`SIGKILL`, power loss): the in-flight row stays `running` and

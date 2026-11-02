@@ -353,7 +353,11 @@ def show_status(db_path: str) -> int:
     rows = conn.execute(
         "SELECT t.task_id, t.status, t.attempts, t.exit_code, t.started_at, t.finished_at, r.flow_name "
         "FROM task_runs t JOIN runs r ON r.run_id = t.run_id "
-        "WHERE t.attempt_id IN (SELECT MAX(attempt_id) FROM task_runs GROUP BY task_id) "
+        # `skipped` is bookkeeping, not a state: it only restates an earlier success
+        # (CONTRACT §2), so looking at it would hide the real status and exit code on
+        # every run after the first. `blocked` is a real state and stays visible.
+        "WHERE t.attempt_id IN (SELECT MAX(attempt_id) FROM task_runs "
+        "WHERE status<>'skipped' GROUP BY task_id) "
         "ORDER BY t.task_id"
     ).fetchall()
     if not rows:
