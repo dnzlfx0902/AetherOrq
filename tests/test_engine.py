@@ -105,6 +105,24 @@ class ValidationTests(FlowTestCase):
         self.assertIn("timeout", res.stderr)
         self.assertIn("retries", res.stderr)
 
+    def test_malformed_depends_on_is_rejected_without_a_traceback(self):
+        """CONTRACT §3: exit 2 and every problem reported, never an uncaught exception."""
+        marker = self.dir / "executed"
+        for bad in (5, {"a": 1}, [{}], ["ok", 7]):
+            with self.subTest(depends_on=bad):
+                flow = self.write_flow(
+                    [
+                        {"id": "a", "argv": py(f"open({str(marker)!r},'w').close()")},
+                        {"id": "b", "argv": py("pass"), "depends_on": bad},
+                    ]
+                )
+                res = self.run_flow(flow)
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertIn("'depends_on' must be a list of task ids", res.stderr)
+                self.assertNotIn("Traceback", res.stderr)
+                self.assertFalse(marker.exists(), "no command may run on an invalid flow")
+                self.assertFalse(self.db.exists(), "no state must be written for an invalid flow")
+
     def test_validate_subcommand_writes_nothing(self):
         flow = self.write_flow([{"id": "a", "argv": py("pass")}])
         res = self.cli("validate", str(flow))

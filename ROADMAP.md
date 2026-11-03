@@ -17,7 +17,7 @@ contract.
 
 Acceptance (all runnable, all already passing):
 
-- `python3 -m unittest discover -s tests -v` → 15 tests, `OK`.
+- `python3 -m unittest discover -s tests -v` → 16 tests, `OK`.
 - A flow with a cycle exits `2`, prints the cycle, executes nothing, creates no db.
 - A failing task leaves `failed`; its descendants are `blocked`; independent
   branches still run; exit code `1`.
