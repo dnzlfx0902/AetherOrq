@@ -98,7 +98,13 @@ def validate_flow(data) -> None:
     for task in tasks:
         if not isinstance(task, dict) or not isinstance(task.get("id"), str):
             continue
-        for dep in task.get("depends_on", []):
+        # A malformed `depends_on` was already reported above; iterating it here would
+        # raise (int/dict is not iterable, unhashable id) and turn exit 2 into a
+        # traceback on invalid input.
+        deps = task.get("depends_on", [])
+        if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
+            continue
+        for dep in deps:
             if dep == task["id"]:
                 errors.append(f"task {task['id']!r} depends on itself")
             elif dep not in ids:
