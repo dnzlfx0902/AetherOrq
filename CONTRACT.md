@@ -146,4 +146,23 @@ engine deliberately does not guess whether a downstream result is still valid.
 
 Parallel execution, sandboxing, secret management, remote execution, UI/TUI,
 AI/LLM integration, plugin system, scheduling, retries with backoff, per-task
-environment or working-directory configuration, `logs`/`inspect` subcommands.
+environment or working-directory configuration, `inspect` subcommands.
+
+## 10. Read-only inspection (M1)
+
+`logs`, `runs` and `status` only read the database. They add no execution
+semantics and cannot change a task's status.
+
+- `logs --db DB --task ID [--lines N]` reports the newest attempt that actually
+  started a process (`skipped`/`blocked` rows never did) with its status, exit
+  code, timing and the tail of stdout/stderr. Exit `2` if the task has no such
+  attempt.
+- `runs --db DB` lists every run with status, task/success/failure counts and
+  duration; a run still in flight has no duration.
+- `status` and `runs` accept `--json`; the JSON is a single object
+  (`{"tasks": [...], "runs": n}` and `{"runs": [...]}`) and parses with
+  `json.loads`.
+- `status` applies §5's rule to the read path: the reported row is the newest
+  attempt whose status is not `skipped`, so a repeated run shows the `succeeded`
+  attempt, its exit code and timestamps instead of the bookkeeping row.
+  `blocked` is a real state and is reported as such.
