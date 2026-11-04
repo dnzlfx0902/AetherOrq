@@ -30,17 +30,26 @@ Acceptance (all runnable, all already passing):
   side-effect log) and finishes the rest — repeatedly: a third and fourth run
   still execute nothing new.
 
-## M1 — Operator visibility (next in the cycle)
+## M1 — Operator visibility (delivered)
 
 `aether logs --db DB --task ID` (tail of stored output) and `aether runs --db DB`
 (run history with status and timing), plus `--json` machine-readable output for
 `status`/`runs`. No new execution semantics.
 
-Acceptance: the two commands exist; `--json` output parses with
-`json.loads` in a test; a test asserts the last stored attempt is returned for a
-task with several attempts; existing M0 tests stay green unchanged.
+Delivered: both commands, `--json` on `status` and `runs`, and `logs` reporting
+the most recent attempt that actually ran — `skipped` rows (which only point at
+an earlier success) and `blocked` rows (which never started) are looked past, so
+the command never answers "nothing" for a task whose output exists.
 
-## M2 — Bounded parallelism
+Acceptance (all runnable, all already passing):
+
+- `python3 -m unittest discover -s tests -v` → 22 tests, `OK` (the 15 M0 tests
+  unchanged, 7 new in `tests/test_visibility.py`).
+- The two commands exist; `--json` output parses with `json.loads` in a test.
+- A test asserts the last stored attempt is returned for a task with several
+  attempts.
+
+## M2 — Bounded parallelism (next in the cycle)
 
 `run --jobs N` executing independent ready tasks concurrently while preserving
 the same resume contract and dependency semantics.

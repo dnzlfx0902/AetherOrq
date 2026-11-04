@@ -345,25 +345,131 @@ def run_flow(flow: dict, db_path: str, force_tasks: set[str] | None = None) -> i
     return 1 if failed else 0
 
 
-def show_status(db_path: str) -> int:
+def _open_existing(db_path: str) -> sqlite3.Connection | None:
     if not Path(db_path).exists():
         print(f"no database at {db_path}", file=sys.stderr)
+        return None
+    return connect(db_path)
+
+
+def _json_print(payload) -> None:
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def show_status(db_path: str, as_json: bool = False) -> int:
+    conn = _open_existing(db_path)
+    if conn is None:
         return 2
-    conn = connect(db_path)
     rows = conn.execute(
         "SELECT t.task_id, t.status, t.attempts, t.exit_code, t.started_at, t.finished_at, r.flow_name "
         "FROM task_runs t JOIN runs r ON r.run_id = t.run_id "
         "WHERE t.attempt_id IN (SELECT MAX(attempt_id) FROM task_runs GROUP BY task_id) "
         "ORDER BY t.task_id"
     ).fetchall()
+    runs = conn.execute("SELECT COUNT(*), MAX(run_id) FROM runs").fetchone()
+    conn.close()
+    if as_json:
+        _json_print(
+            {
+                "flow": rows[0][6] if rows else None,
+                "runs": runs[0],
+                "tasks": [
+                    {
+                        "task_id": task_id,
+                        "status": status,
+                        "attempts": attempts,
+                        "exit_code": code,
+                        "started_at": started,
+                        "finished_at": finished,
+                    }
+                    for task_id, status, attempts, code, started, finished, _ in rows
+                ],
+            }
+        )
+        return 0
     if not rows:
         print("no attempts recorded")
         return 0
     print(f"{'task':<20} {'status':<11} {'tries':>5} {'exit':>4}  finished")
     for task_id, status, attempts, code, started, finished, flow_name in rows:
         print(f"{task_id:<20} {status:<11} {attempts:>5} {str(code):>4}  {finished or started}")
-    runs = conn.execute("SELECT COUNT(*), MAX(run_id) FROM runs").fetchone()
     print(f"\nflow(s) in this db: {rows[0][6]!r}; runs: {runs[0]}")
+    return 0
+
+
+def show_runs(db_path: str, as_json: bool = False) -> int:
+    conn = _open_existing(db_path)
+    if conn is None:
+        return 2
+    rows = conn.execute(
+        "SELECT run_id, flow_name, status, started_at, finished_at FROM runs ORDER BY run_id"
+    ).fetchall()
+    conn.close()
+    if as_json:
+        _json_print(
+            {
+                "runs": [
+                    {
+                        "run_id": run_id,
+                        "flow_name": flow_name,
+                        "status": status,
+                        "started_at": started,
+                        "finished_at": finished,
+                    }
+                    for run_id, flow_name, status, started, finished in rows
+                ]
+            }
+        )
+        return 0
+    if not rows:
+        print("no runs recorded")
+        return 0
+    print(f"{'run':>4}  {'status':<11} {'started':<20} finished")
+    for run_id, flow_name, status, started, finished in rows:
+        print(f"{run_id:>4}  {status:<11} {started:<20} {finished or '-'}  {flow_name}")
+    return 0
+
+
+# Rows that carry no execution output (a `skipped` row only points at an earlier
+# success, a `blocked` row never started), so `logs` looks past them.
+OUTPUT_STATUSES = ("succeeded", "failed", "timed_out", "interrupted")
+
+
+def _last_output_attempt(conn: sqlite3.Connection, task_id: str):
+    placeholders = ", ".join("?" * len(OUTPUT_STATUSES))
+    return conn.execute(
+        "SELECT attempt_id, run_id, status, attempts, exit_code, started_at, finished_at, "
+        f"stdout, stderr, error FROM task_runs WHERE task_id=? AND status IN ({placeholders}) "
+        "ORDER BY attempt_id DESC LIMIT 1",
+        (task_id, *OUTPUT_STATUSES),
+    ).fetchone()
+
+
+def _block(title: str, text: str | None) -> None:
+    text = text or ""
+    print(f"--- {title}")
+    if text:
+        print(text, end="" if text.endswith("\n") else "\n")
+
+
+def show_logs(db_path: str, task_id: str) -> int:
+    conn = _open_existing(db_path)
+    if conn is None:
+        return 2
+    row = _last_output_attempt(conn, task_id)
+    conn.close()
+    if row is None:
+        print(f"no attempts with output recorded for task {task_id!r}", file=sys.stderr)
+        return 1
+    attempt_id, run_id, status, attempts, code, started, finished, out, err, errmsg = row
+    print(
+        f"task {task_id}  attempt #{attempt_id} (run {run_id})  status={status}  "
+        f"tries={attempts}  exit={code}  finished={finished or started}"
+    )
+    _block("stdout", out)
+    _block("stderr", err)
+    if errmsg:
+        _block("error", errmsg)
     return 0
 
 
@@ -387,10 +493,23 @@ def main(argv: list[str] | None = None) -> int:
 
     p_status = sub.add_parser("status", help="show the last state of every task")
     p_status.add_argument("--db", required=True)
+    p_status.add_argument("--json", action="store_true", help="machine-readable output")
+
+    p_runs = sub.add_parser("runs", help="list runs recorded in the state file")
+    p_runs.add_argument("--db", required=True)
+    p_runs.add_argument("--json", action="store_true", help="machine-readable output")
+
+    p_logs = sub.add_parser("logs", help="show the output of a task's last attempt")
+    p_logs.add_argument("--db", required=True)
+    p_logs.add_argument("--task", required=True, metavar="ID")
 
     args = parser.parse_args(argv)
     if args.cmd == "status":
-        return show_status(args.db)
+        return show_status(args.db, args.json)
+    if args.cmd == "runs":
+        return show_runs(args.db, args.json)
+    if args.cmd == "logs":
+        return show_logs(args.db, args.task)
     try:
         flow = load_flow(args.flow)
     except FlowError as exc:
