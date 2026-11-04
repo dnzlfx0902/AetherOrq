@@ -202,15 +202,22 @@ def previous_status(conn, task_id: str, command_hash: str) -> str | None:
 
 def execute(argv: list[str], timeout: int) -> tuple[str, int | None, str, str, str | None]:
     """Run one attempt. No shell: argv is passed to the OS verbatim."""
-    proc = subprocess.Popen(
-        argv,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        errors="replace",
-        start_new_session=True,  # own process group, so a timeout kills the whole tree
-    )
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            start_new_session=True,  # own process group, so a timeout kills the whole tree
+        )
+    except OSError as exc:
+        # A command that cannot start (missing binary, no permission) is a failed
+        # attempt, not an engine crash: the row must never stay `running`, which
+        # would report as live work that never ran (CONTRACT §6).
+        return "failed", None, "", "", f"cannot start {argv[0]!r}: {exc.strerror or exc}"
+
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:

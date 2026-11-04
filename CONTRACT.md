@@ -105,6 +105,10 @@ repeated runs of an unchanged flow keep skipping indefinitely.
   marked `interrupted`, the run `interrupted`, exit `130`.
 - Timeout: `timed_out`; it is a failure for dependency purposes and is retried
   within the run if `retries` allows.
+- A command that cannot start at all (missing binary, no execute permission,
+  `ENOEXEC`) is `failed` with `exit_code` NULL and the OS error in `error`
+  (`cannot start '<argv[0]>': ...`). It is never left `running`, and it counts as
+  a failure for its dependents like any other failed attempt.
 - No task is ever reported `succeeded` without a zero exit code from its
   process. Recovery never converts an unknown outcome into success.
 

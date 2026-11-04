@@ -336,6 +336,29 @@ class ResumeTests(FlowTestCase):
         self.assertIn("interrupted", [s for _, s, _, _ in self.rows()])
         self.assertEqual(self.latest()["job"][0], "succeeded")
 
+    def test_unstartable_command_fails_the_task_instead_of_crashing(self):
+        """A missing binary is a failed attempt, never a dangling `running` row.
+
+        `status` is the operator's only view (M1); a traceback here left the
+        attempt and the run `running` forever, which reports work that never ran.
+        """
+        flow = self.write_flow([{"id": "ghost", "argv": ["/nonexistent/aether-probe-binary"]}])
+        res = self.run_flow(flow)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        conn = sqlite3.connect(self.db)
+        status, code, error = conn.execute(
+            "SELECT status, exit_code, error FROM task_runs WHERE task_id='ghost'"
+        ).fetchone()
+        run_status = conn.execute(
+            "SELECT status FROM runs ORDER BY run_id DESC LIMIT 1"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual((status, code), ("failed", None))
+        self.assertIn("cannot start", error)
+        self.assertEqual(run_status, "failed")
+        self.assertIn("failed", self.cli("status", "--db", str(self.db)).stdout)
+
     def test_status_subcommand_reports_latest_state(self):
         flow = self.write_flow([{"id": "a", "argv": py("pass")}])
         self.assertEqual(self.run_flow(flow).returncode, 0)
