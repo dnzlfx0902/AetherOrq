@@ -41,9 +41,10 @@ semantics: M0's resume contract and schema are unchanged.
 
 Acceptance (all runnable, all already passing):
 
-- `python3 -m unittest discover -s tests -v` → 23 tests (M0's 15 unchanged), `OK`.
+- `python3 -m unittest discover -s tests -v` → 24 tests (M0's 15 unchanged), `OK`.
 - `aether logs --db DB --task ID` prints the tail of the last stored attempt for a
-  task with several attempts, and no older attempt's output.
+  task with several attempts, and no older attempt's output; for output over the
+  64 KiB cap it still prints the real last lines and says `capture truncated`.
 - `aether runs --db DB` lists every run with its status and timing.
 - `status --json` and `runs --json` parse with `json.loads`.
 - `status` reports the newest attempt that is not a `skipped` row, so the real

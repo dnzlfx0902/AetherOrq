@@ -167,9 +167,13 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 
 def _cut(text: str | None) -> str | None:
+    # Keep both ends: the head explains how a task started, the tail is what
+    # `logs` tails. Head-only truncation silently dropped the end of a long
+    # output, so `logs --lines N` showed lines from the middle of the capture.
     if text is None or len(text) <= CAPTURE_LIMIT:
         return text
-    return text[:CAPTURE_LIMIT] + f"\n[truncated {len(text) - CAPTURE_LIMIT} chars]"
+    keep = CAPTURE_LIMIT // 2
+    return f"{text[:keep]}\n[truncated {len(text) - 2 * keep} chars]\n{text[-keep:]}"
 
 
 def recover(conn: sqlite3.Connection) -> int:
@@ -478,7 +482,10 @@ def show_logs(db_path: str, task_id: str, lines: int) -> int:
     )
     print(f"started {started or '-'}  finished {finished or '-'}" + (f"  error: {errmsg}" if errmsg else ""))
     for name, text in (("stdout", out), ("stderr", err)):
-        print(f"--- {name} (last {lines} lines) ---" if text else f"--- {name}: empty ---")
+        # The capture is capped, so the tail can sit behind dropped middle lines.
+        # Say so instead of letting the operator trust an incomplete view.
+        cut = "; capture truncated" if text and "[truncated " in text else ""
+        print(f"--- {name} (last {lines} lines{cut}) ---" if text else f"--- {name}: empty ---")
         for line in _tail(text, lines):
             print(line)
     return 0

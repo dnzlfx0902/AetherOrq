@@ -48,6 +48,18 @@ class OperatorVisibilityTests(FlowTestCase):
         self.assertEqual(missing.returncode, 2)
         self.assertIn("no stored attempt", missing.stderr)
 
+    def test_logs_tail_survives_the_capture_limit(self):
+        code = "for n in range(1, 20001): print(f'line{n:05d}')"
+        flow = self.write_flow([{"id": "chatty", "argv": py(code)}])
+        self.assertEqual(self.run_flow(flow).returncode, 0)
+
+        res = self.logs("chatty", "--lines", "2")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("line20000", res.stdout, "logs must show the real end of a capped output")
+        self.assertIn("line19999", res.stdout)
+        self.assertNotIn("line00001", res.stdout, "the uncapped head is not the tail")
+        self.assertIn("capture truncated", res.stdout, "a capped capture must say so")
+
     def test_logs_skips_rows_that_never_ran_a_process(self):
         flow = self.write_flow([{"id": "a", "argv": py("print('real-output')")}])
         self.assertEqual(self.run_flow(flow).returncode, 0)
