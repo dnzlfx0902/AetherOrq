@@ -15,6 +15,8 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import threading
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +25,14 @@ MAX_RETRIES = 10
 CAPTURE_LIMIT = 65536
 FLOW_KEYS = {"name", "tasks", "description"}
 TASK_KEYS = {"id", "argv", "depends_on", "timeout", "retries"}
+
+# Children currently in flight, so an interrupt can kill them all (parallel runs
+# hold one process group each; the sequential path kills its own in `execute`).
+LIVE: set[subprocess.Popen] = set()
+LIVE_LOCK = threading.Lock()
+# Set when the operator interrupts a parallel run: children then die by our own
+# SIGKILL, and their attempts must be recorded as `interrupted`, not `failed`.
+INTERRUPTED = threading.Event()
 
 
 class FlowError(Exception):
@@ -159,7 +169,8 @@ CREATE INDEX IF NOT EXISTS task_runs_lookup ON task_runs(task_id, command_hash, 
 
 
 def connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    # `timeout`: parallel workers each write short rows; WAL serialises writers.
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
@@ -215,25 +226,45 @@ def execute(argv: list[str], timeout: int) -> tuple[str, int | None, str, str, s
         errors="replace",
         start_new_session=True,  # own process group, so a timeout kills the whole tree
     )
+    with LIVE_LOCK:
+        LIVE.add(proc)
     try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        out, err = proc.communicate()
-        return "timed_out", None, out or "", err or "", f"timeout after {timeout}s"
-    except BaseException:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.communicate()
-        raise
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            out, err = proc.communicate()
+            return "timed_out", None, out or "", err or "", f"timeout after {timeout}s"
+        except BaseException:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            raise
+    finally:
+        with LIVE_LOCK:
+            LIVE.discard(proc)
+    if INTERRUPTED.is_set() and proc.returncode is not None and proc.returncode < 0:
+        return "interrupted", proc.returncode, out or "", err or "", "interrupted by the operator"
     if proc.returncode == 0:
         return "succeeded", 0, out or "", err or "", None
     return "failed", proc.returncode, out or "", err or "", f"exit code {proc.returncode}"
+
+
+def kill_live() -> None:
+    """Kill every child still in flight (parallel runs; each has its own group)."""
+    INTERRUPTED.set()
+    with LIVE_LOCK:
+        procs = list(LIVE)
+    for proc in procs:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def open_attempt(conn, run_id: int, task: dict, command_hash: str) -> int:
@@ -255,7 +286,137 @@ def close_attempt(conn, attempt_id: int, status: str, attempts: int, exit_code, 
     conn.commit()
 
 
-def run_flow(flow: dict, db_path: str, force_tasks: set[str] | None = None) -> int:
+def _record_blocked(conn, run_id: int, task: dict, command_hash: str) -> None:
+    conn.execute(
+        "INSERT INTO task_runs (run_id, task_id, command_hash, status, finished_at, error) "
+        "VALUES (?, ?, ?, 'blocked', ?, ?)",
+        (run_id, task["id"], command_hash, now(), "upstream task did not succeed"),
+    )
+    conn.commit()
+    print(f"blocked  {task['id']}")
+
+
+def _run_task(conn, run_id: int, task: dict, forced: set[str]) -> str:
+    """Resume decision plus bounded retries for one task. Returns the final status."""
+    tid = task["id"]
+    command_hash = sha(task["argv"])
+    prior = previous_status(conn, tid, command_hash)
+    if prior == "succeeded" and tid not in forced:
+        conn.execute(
+            "INSERT INTO task_runs (run_id, task_id, command_hash, status, finished_at, error) "
+            "VALUES (?, ?, ?, 'skipped', ?, 'already succeeded with the same command')",
+            (run_id, tid, command_hash, now()),
+        )
+        conn.commit()
+        print(f"skipped  {tid} (already succeeded with the same command)")
+        return "skipped"
+
+    timeout = task.get("timeout", DEFAULT_TIMEOUT)
+    retries = task.get("retries", 0)
+    attempt_id = open_attempt(conn, run_id, task, command_hash)
+    status, code, out, err, errmsg = "failed", None, "", "", "not attempted"
+    attempts = 0
+    for attempts in range(1, retries + 2):
+        print(f"running  {tid} (attempt {attempts}/{retries + 1})", flush=True)
+        status, code, out, err, errmsg = execute(task["argv"], timeout)
+        if status in ("succeeded", "interrupted"):
+            break
+        if attempts <= retries:
+            print(f"retrying {tid} after {status}: {errmsg}", file=sys.stderr, flush=True)
+    close_attempt(conn, attempt_id, status, attempts, code, out, err, errmsg)
+    print(f"{status:<8} {tid} (exit={code})", flush=True)
+    return status
+
+
+def _run_sequential(conn, run_id: int, order: list[str], tasks: dict, forced: set[str]) -> bool:
+    results: dict[str, str] = {}
+    failed = False
+    for tid in order:
+        task = tasks[tid]
+        dep_states = [results.get(d, "pending") for d in task.get("depends_on", [])]
+        if any(s not in ("succeeded", "skipped") for s in dep_states):
+            results[tid] = "blocked"
+            _record_blocked(conn, run_id, task, sha(task["argv"]))
+            failed = True
+            continue
+        results[tid] = _run_task(conn, run_id, task, forced)
+        if results[tid] not in ("succeeded", "skipped"):
+            failed = True
+    return failed
+
+
+def _task_worker(db_path: str, run_id: int, task: dict, forced: set[str]) -> str:
+    # One connection per worker thread: sqlite connections are not shared across
+    # threads, and the writes are short (WAL serialises the writers).
+    conn = connect(db_path)
+    try:
+        return _run_task(conn, run_id, task, forced)
+    finally:
+        conn.close()
+
+
+def _run_parallel(
+    conn, db_path: str, run_id: int, order: list[str], tasks: dict, forced: set[str], jobs: int
+) -> bool:
+    """Bounded parallelism: at most `jobs` tasks in flight, deps still gate starts.
+
+    Same semantics as the sequential loop (blocking is transitive, a failing
+    branch only blocks its descendants); ready tasks are taken in id order.
+    """
+    children: dict[str, list[str]] = {tid: [] for tid in order}
+    pending: dict[str, int] = {}
+    for tid in order:
+        deps = tasks[tid].get("depends_on", [])
+        pending[tid] = len(deps)
+        for dep in deps:
+            children[dep].append(tid)
+    results: dict[str, str] = {}
+    failed = False
+    ready = sorted(tid for tid in order if pending[tid] == 0)
+    inflight = {}
+    pool = ThreadPoolExecutor(max_workers=jobs)
+    try:
+        while ready or inflight:
+            while ready and len(inflight) < jobs:
+                tid = ready.pop(0)
+                task = tasks[tid]
+                dep_states = [results.get(d, "pending") for d in task.get("depends_on", [])]
+                if any(s not in ("succeeded", "skipped") for s in dep_states):
+                    results[tid] = "blocked"
+                    _record_blocked(conn, run_id, task, sha(task["argv"]))
+                    failed = True
+                    for child in children[tid]:
+                        pending[child] -= 1
+                        if pending[child] == 0:
+                            ready.append(child)
+                    ready.sort()
+                    continue
+                inflight[pool.submit(_task_worker, db_path, run_id, task, forced)] = tid
+            if not inflight:
+                continue
+            done, _ = wait(inflight, return_when=FIRST_COMPLETED)
+            for fut in done:
+                tid = inflight.pop(fut)
+                status = fut.result()
+                results[tid] = status
+                if status not in ("succeeded", "skipped"):
+                    failed = True
+                for child in children[tid]:
+                    pending[child] -= 1
+                    if pending[child] == 0:
+                        ready.append(child)
+                ready.sort()
+    except BaseException:
+        # Ctrl-C (or anything else) in the main thread: the children live in their
+        # own process groups, so kill them explicitly before the pool joins.
+        kill_live()
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
+    return failed
+
+
+def run_flow(flow: dict, db_path: str, force_tasks: set[str] | None = None, jobs: int = 1) -> int:
     force_tasks = force_tasks or set()
     order = topo_order(flow["tasks"])
     tasks = {t["id"]: t for t in flow["tasks"]}
@@ -281,56 +442,14 @@ def run_flow(flow: dict, db_path: str, force_tasks: set[str] | None = None) -> i
         "INSERT INTO runs (flow_name, flow_hash, started_at, status) VALUES (?, ?, ?, 'running')",
         (flow["name"], flow_hash, now()),
     ).lastrowid
+    assert run_id is not None  # an INSERT always assigns a rowid
     conn.commit()
 
-    results: dict[str, str] = {}
-    failed = False
     try:
-        for tid in order:
-            task = tasks[tid]
-            dep_states = [results.get(d, "pending") for d in task.get("depends_on", [])]
-            command_hash = sha(task["argv"])
-            prior = previous_status(conn, tid, command_hash)
-
-            if any(s not in ("succeeded", "skipped") for s in dep_states):
-                results[tid] = "blocked"
-                conn.execute(
-                    "INSERT INTO task_runs (run_id, task_id, command_hash, status, finished_at, error) "
-                    "VALUES (?, ?, ?, 'blocked', ?, ?)",
-                    (run_id, tid, command_hash, now(), "upstream task did not succeed"),
-                )
-                conn.commit()
-                failed = True
-                print(f"blocked  {tid}")
-                continue
-            if prior == "succeeded" and tid not in forced:
-                results[tid] = "skipped"
-                conn.execute(
-                    "INSERT INTO task_runs (run_id, task_id, command_hash, status, finished_at, error) "
-                    "VALUES (?, ?, ?, 'skipped', ?, 'already succeeded with the same command')",
-                    (run_id, tid, command_hash, now()),
-                )
-                conn.commit()
-                print(f"skipped  {tid} (already succeeded with the same command)")
-                continue
-
-            timeout = task.get("timeout", DEFAULT_TIMEOUT)
-            retries = task.get("retries", 0)
-            attempt_id = open_attempt(conn, run_id, task, command_hash)
-            status, code, out, err, errmsg = "failed", None, "", "", "not attempted"
-            attempts = 0
-            for attempts in range(1, retries + 2):
-                print(f"running  {tid} (attempt {attempts}/{retries + 1})", flush=True)
-                status, code, out, err, errmsg = execute(task["argv"], timeout)
-                if status == "succeeded":
-                    break
-                if attempts <= retries:
-                    print(f"retrying {tid} after {status}: {errmsg}", file=sys.stderr, flush=True)
-            close_attempt(conn, attempt_id, status, attempts, code, out, err, errmsg)
-            results[tid] = status
-            print(f"{status:<8} {tid} (exit={code})")
-            if status != "succeeded":
-                failed = True
+        if jobs > 1:
+            failed = _run_parallel(conn, db_path, run_id, order, tasks, forced, jobs)
+        else:
+            failed = _run_sequential(conn, run_id, order, tasks, forced)
     except KeyboardInterrupt:
         recover(conn)
         conn.execute(
@@ -506,6 +625,14 @@ def main(argv: list[str] | None = None) -> int:
         help="re-run this task even if it already succeeded (repeatable)",
     )
 
+    p_run.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run up to N independent ready tasks concurrently (default 1 = sequential)",
+    )
+
     p_val = sub.add_parser("validate", help="validate a flow without executing anything")
     p_val.add_argument("flow")
 
@@ -523,6 +650,9 @@ def main(argv: list[str] | None = None) -> int:
     p_runs.add_argument("--json", action="store_true", help="machine-readable output")
 
     args = parser.parse_args(argv)
+    if args.cmd == "run" and args.jobs < 1:
+        print("--jobs must be an integer >= 1", file=sys.stderr)
+        return 2
     if args.cmd == "status":
         return show_status(args.db, args.json)
     if args.cmd == "logs":
@@ -538,7 +668,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ok: {flow['name']} ({len(flow['tasks'])} tasks)")
         return 0
     db_path = args.db or str(Path(args.flow).with_suffix(".db"))
-    return run_flow(flow, db_path, set(args.force_task))
+    return run_flow(flow, db_path, set(args.force_task), args.jobs)
 
 
 if __name__ == "__main__":

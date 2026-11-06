@@ -57,6 +57,7 @@ flow nothing is executed and no database is written (exit code `2`).
 ```bash
 python3 aether.py validate examples/flow.json
 python3 aether.py run examples/flow.json --db demo.db
+python3 aether.py run examples/flow.json --db demo.db --jobs 4
 python3 aether.py status --db demo.db
 python3 aether.py logs --db demo.db --task write_artifact --lines 20
 python3 aether.py runs --db demo.db
@@ -84,6 +85,12 @@ skipped  greet (already succeeded with the same command)
 `--force-task ID` re-runs a task even if it already succeeded, and re-runs
 everything downstream of it (repeatable). Use it after changing something the
 task depends on outside the flow file.
+
+`--jobs N` runs up to `N` *independent* ready tasks at the same time (default
+`1`, strictly sequential). Dependencies still gate starts, a failing branch still
+blocks only its descendants, and the resume contract is unchanged; the output
+lines of concurrent tasks interleave. Ctrl-C kills every task in flight and
+exits `130`.
 
 Failed tasks block their descendants (transitively) but do not block unrelated
 branches: the engine keeps going and exits `1`. Blocked tasks get a row with
@@ -122,12 +129,14 @@ secrets in flow files or in commands — they are stored in the SQLite database
 python3 -m unittest discover -s tests -v
 ```
 
-24 end-to-end tests (M0's 15 plus M1's 9). They drive the real CLI in subprocesses
+24 end-to-end tests (M0's 15 plus M1's 9) and 7 for `--jobs` (M2 step 1). They
+drive the real CLI in subprocesses
 and inspect the real database: cycle rejected before execution, unknown/duplicate
 ids, shell string rejected, dependency order, failure propagation, bounded retries,
 process-tree kill on timeout, resume without re-running completed tasks across
 four consecutive runs, flow change semantics, forced re-run, SIGKILL recovery,
-`status` output, `logs` tail of the last attempt, `runs` history, `--json`.
+`status` output, `logs` tail of the last attempt, `runs` history, `--json`,
+concurrent wall-clock, dependency gating and Ctrl-C under `--jobs`.
 
 ## Roadmap
 
