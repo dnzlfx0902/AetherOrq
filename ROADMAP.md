@@ -30,17 +30,27 @@ Acceptance (all runnable, all already passing):
   side-effect log) and finishes the rest — repeatedly: a third and fourth run
   still execute nothing new.
 
-## M1 — Operator visibility (next in the cycle)
+## M1 — Operator visibility
 
-`aether logs --db DB --task ID` (tail of stored output) and `aether runs --db DB`
-(run history with status and timing), plus `--json` machine-readable output for
-`status`/`runs`. No new execution semantics.
+Delivered: `aether logs --db DB --task ID [--lines N]` (tail of the newest stored
+attempt's stdout/stderr plus its status, exit code and timing; `skipped`/`blocked`
+rows carry no output and are not counted as attempts) and `aether runs --db DB`
+(run history with status, task/failure counts and wall-clock duration), plus
+`--json` machine-readable output for `status` and `runs`. No new execution
+semantics: M0's resume contract and schema are unchanged.
 
-Acceptance: the two commands exist; `--json` output parses with
-`json.loads` in a test; a test asserts the last stored attempt is returned for a
-task with several attempts; existing M0 tests stay green unchanged.
+Acceptance (all runnable, all already passing):
 
-## M2 — Bounded parallelism
+- `python3 -m unittest discover -s tests -v` → 24 tests (M0's 15 unchanged), `OK`.
+- `aether logs --db DB --task ID` prints the tail of the last stored attempt for a
+  task with several attempts, and no older attempt's output; for output over the
+  64 KiB cap it still prints the real last lines and says `capture truncated`.
+- `aether runs --db DB` lists every run with its status and timing.
+- `status --json` and `runs --json` parse with `json.loads`.
+- `status` reports the newest attempt that is not a `skipped` row, so the real
+  state and exit code survive repeated runs; `blocked` stays visible.
+
+## M2 — Bounded parallelism (next in the cycle)
 
 `run --jobs N` executing independent ready tasks concurrently while preserving
 the same resume contract and dependency semantics.

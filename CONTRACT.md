@@ -137,7 +137,8 @@ engine deliberately does not guess whether a downstream result is still valid.
    explicit `--force-task`. Nothing in the engine flips it back.
 5. Every executed process leaves a row with `started_at`, `finished_at`, exit
    code and capped output. Deleting the db deletes the audit trail.
-6. stdout/stderr (up to 64 KiB each) and `argv` are stored in the database:
+6. stdout/stderr (up to 64 KiB each, keeping the first and last halves around a
+   `[truncated N chars]` marker) and `argv` are stored in the database:
    treat the db as sensitive and never place secrets in commands or flow files.
 7. Removing state = delete the db file. Code rollback = `git revert`; never
    delete the repository or rewrite published history.
@@ -146,4 +147,24 @@ engine deliberately does not guess whether a downstream result is still valid.
 
 Parallel execution, sandboxing, secret management, remote execution, UI/TUI,
 AI/LLM integration, plugin system, scheduling, retries with backoff, per-task
-environment or working-directory configuration, `logs`/`inspect` subcommands.
+environment or working-directory configuration, `inspect` subcommands.
+
+## 10. Read-only inspection (M1)
+
+`logs`, `runs` and `status` only read the database. They add no execution
+semantics and cannot change a task's status.
+
+- `logs --db DB --task ID [--lines N]` reports the newest attempt that actually
+  started a process (`skipped`/`blocked` rows never did) with its status, exit
+  code, timing and the tail of stdout/stderr. Exit `2` if the task has no such
+  attempt. A capped stream keeps its real end (§8.6) and is labelled
+  `capture truncated`, so a partial tail is never mistaken for the full output.
+- `runs --db DB` lists every run with status, task/success/failure counts and
+  duration; a run still in flight has no duration.
+- `status` and `runs` accept `--json`; the JSON is a single object
+  (`{"tasks": [...], "runs": n}` and `{"runs": [...]}`) and parses with
+  `json.loads`.
+- `status` applies §5's rule to the read path: the reported row is the newest
+  attempt whose status is not `skipped`, so a repeated run shows the `succeeded`
+  attempt, its exit code and timestamps instead of the bookkeeping row.
+  `blocked` is a real state and is reported as such.
