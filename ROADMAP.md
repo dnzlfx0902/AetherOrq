@@ -55,6 +55,11 @@ Acceptance (all runnable, all already passing):
 `run --jobs N` executing independent ready tasks concurrently while preserving
 the same resume contract and dependency semantics.
 
+Delivered so far (step 1): `run --jobs N` with dependency gating, transitive
+blocking, resume and SIGKILL recovery unchanged, and Ctrl-C killing every task in
+flight. Still open for M2: the single-writer lock file, so a second concurrent
+`aether run` on the same db is still unsupported.
+
 Acceptance: with `--jobs 4` and 4 independent 1 s sleeps the wall time is
 < 2.5 s; a dependency still never starts before its parent succeeds; a failing
 branch still blocks only its descendants; kill-recovery and resume tests pass

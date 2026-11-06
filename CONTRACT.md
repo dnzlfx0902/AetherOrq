@@ -168,3 +168,27 @@ semantics and cannot change a task's status.
   attempt whose status is not `skipped`, so a repeated run shows the `succeeded`
   attempt, its exit code and timestamps instead of the bookkeeping row.
   `blocked` is a real state and is reported as such.
+
+## 11. Bounded parallelism (M2, step 1)
+
+`run --jobs N` (default `1`) executes up to `N` *ready* tasks at the same time.
+Only scheduling changes; every rule above still holds:
+
+- A task starts only when every dependency ended `succeeded`/`skipped` in this
+  run, so a dependency never starts before its parent succeeds. Ready tasks are
+  taken in lexicographic id order, so the same flow schedules the same way.
+- Blocking is transitive and unchanged: a failing branch blocks only its
+  descendants; independent branches keep running.
+- Resume (§5), retries (§4) and recovery (§6) are per task and unaffected: each
+  attempt still gets a row before its process starts. `skipped` rows are still
+  bookkeeping, not evidence.
+- One SQLite connection per worker thread; WAL plus a 30 s busy timeout
+  serialises the short writes. All state stays in the same single db file.
+- Ctrl-C kills every task in flight (each has its own process group), marks those
+  attempts `interrupted`, the run `interrupted`, and exits `130`.
+- Output lines of concurrent tasks interleave; `logs`, `runs` and `status` read
+  the same rows as before.
+- `--jobs` below `1` is a usage error: exit `2`, nothing executed, no db created.
+
+Still open for M2: the single-writer lock file. §8.2 applies unchanged — do not
+run two `aether run` processes against the same db.
