@@ -127,12 +127,14 @@ engine deliberately does not guess whether a downstream result is still valid.
 
 1. One database per flow. Two different flows sharing a `--db` file would mix
    history; recovery and `status` are db-wide. Not supported in M0.
-2. Single writer. Do not run two `aether run` processes against the same db
-   simultaneously; there is no lock. Recovery would mark the other process's
-   in-flight attempts as `interrupted`.
-3. All state lives in the `--db` file (plus its `-wal`/`-shm` siblings). No
-   daemons, no sockets, no network calls, no cron entries, no changes to
-   environment or user config.
+2. Single writer, enforced. `aether run` takes an exclusive `flock` on
+   `<db>.lock` before it opens the db. A second `aether run` on the same db exits
+   `2` with a clear error and touches no state (§11). The kernel drops the lock
+   when the holder exits or dies, so there is no stale lock to clean up, and the
+   read-only commands (`status`, `logs`, `runs`) never take it.
+3. All state lives in the `--db` file (plus its `-wal`/`-shm` siblings and the
+   `<db>.lock` marker). No daemons, no sockets, no network calls, no cron
+   entries, no changes to environment or user config.
 4. `succeeded` is terminal for a given (`task_id`, `command_hash`) until an
    explicit `--force-task`. Nothing in the engine flips it back.
 5. Every executed process leaves a row with `started_at`, `finished_at`, exit
@@ -189,6 +191,10 @@ Only scheduling changes; every rule above still holds:
 - Output lines of concurrent tasks interleave; `logs`, `runs` and `status` read
   the same rows as before.
 - `--jobs` below `1` is a usage error: exit `2`, nothing executed, no db created.
-
-Still open for M2: the single-writer lock file. §8.2 applies unchanged — do not
-run two `aether run` processes against the same db.
+- Single writer (§8.2): `run` holds an exclusive `flock` on `<db>.lock` for the
+  whole run. A second `run` on the same db exits `2` with
+  "another `aether run` is already writing …" and records nothing — no run row,
+  no recovery. The lock is taken before the db is opened and dropped by the
+  kernel on exit, failure or crash, so a SIGKILL leaves no stale lock.
+  `validate`, `status`, `logs` and `runs` do not take the lock.
+- Step 1 and step 2 are both delivered; M2 is closed.

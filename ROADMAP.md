@@ -50,21 +50,24 @@ Acceptance (all runnable, all already passing):
 - `status` reports the newest attempt that is not a `skipped` row, so the real
   state and exit code survive repeated runs; `blocked` stays visible.
 
-## M2 — Bounded parallelism (next in the cycle)
+## M2 — Bounded parallelism (delivered)
 
 `run --jobs N` executing independent ready tasks concurrently while preserving
 the same resume contract and dependency semantics.
 
-Delivered so far (step 1): `run --jobs N` with dependency gating, transitive
-blocking, resume and SIGKILL recovery unchanged, and Ctrl-C killing every task in
-flight. Still open for M2: the single-writer lock file, so a second concurrent
-`aether run` on the same db is still unsupported.
+Delivered: step 1 `run --jobs N` with dependency gating, transitive blocking,
+resume and SIGKILL recovery unchanged, and Ctrl-C killing every task in flight;
+step 2 the single-writer lock file `<db>.lock`, held with `flock` for the whole
+run and released by the kernel on exit or crash, so a second concurrent
+`aether run` on the same db exits `2` with a clear error and records nothing.
 
 Acceptance: with `--jobs 4` and 4 independent 1 s sleeps the wall time is
 < 2.5 s; a dependency still never starts before its parent succeeds; a failing
 branch still blocks only its descendants; kill-recovery and resume tests pass
 with `--jobs 2`; the single-writer invariant is enforced by a lock file that
-makes a second concurrent `run` fail with a clear error.
+makes a second concurrent `run` fail with a clear error; the lock is released
+after a successful run, a failed run and a SIGKILLed run, and read-only
+commands still work while a run holds it.
 
 ## M3 — Per-task execution context
 

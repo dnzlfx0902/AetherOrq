@@ -71,8 +71,8 @@ real end and is labelled `capture truncated`. `runs` lists each run with its
 status, task/failure counts and duration.
 
 `run` exit codes: `0` every task succeeded (or was already done), `1` at least
-one task failed/blocked, `2` invalid flow or unreadable file, `130` interrupted
-by Ctrl-C.
+one task failed/blocked, `2` invalid flow, unreadable file, or another `aether
+run` already writing that db, `130` interrupted by Ctrl-C.
 
 Each run prints one line per task:
 
@@ -91,6 +91,12 @@ task depends on outside the flow file.
 blocks only its descendants, and the resume contract is unchanged; the output
 lines of concurrent tasks interleave. Ctrl-C kills every task in flight and
 exits `130`.
+
+Only one `run` writes a db at a time: `run` holds an exclusive lock on
+`<db>.lock` for its whole duration, so a second `run` on the same db exits `2`
+with a clear error and records nothing. The lock dies with the process, so a
+crashed run leaves no stale lock, and `status`/`logs`/`runs` stay readable while
+a run is in flight.
 
 Failed tasks block their descendants (transitively) but do not block unrelated
 branches: the engine keeps going and exits `1`. Blocked tasks get a row with
@@ -129,14 +135,15 @@ secrets in flow files or in commands — they are stored in the SQLite database
 python3 -m unittest discover -s tests -v
 ```
 
-24 end-to-end tests (M0's 15 plus M1's 9) and 7 for `--jobs` (M2 step 1). They
+36 end-to-end tests (M0's 15, M1's 9, 7 for `--jobs`, 5 for the writer lock). They
 drive the real CLI in subprocesses
 and inspect the real database: cycle rejected before execution, unknown/duplicate
 ids, shell string rejected, dependency order, failure propagation, bounded retries,
 process-tree kill on timeout, resume without re-running completed tasks across
 four consecutive runs, flow change semantics, forced re-run, SIGKILL recovery,
 `status` output, `logs` tail of the last attempt, `runs` history, `--json`,
-concurrent wall-clock, dependency gating and Ctrl-C under `--jobs`.
+concurrent wall-clock, dependency gating and Ctrl-C under `--jobs`, and the
+writer lock (second run refused, release after success/failure/SIGKILL).
 
 ## Roadmap
 
