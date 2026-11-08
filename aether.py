@@ -24,7 +24,7 @@ DEFAULT_TIMEOUT = 300
 MAX_RETRIES = 10
 CAPTURE_LIMIT = 65536
 FLOW_KEYS = {"name", "tasks", "description"}
-TASK_KEYS = {"id", "argv", "depends_on", "timeout", "retries"}
+TASK_KEYS = {"id", "argv", "depends_on", "timeout", "retries", "cwd", "env"}
 
 # Children currently in flight, so an interrupt can kill them all (parallel runs
 # hold one process group each; the sequential path kills its own in `execute`).
@@ -92,6 +92,13 @@ def load_flow(path: str) -> dict:
     except json.JSONDecodeError as exc:
         raise FlowError(f"flow file is not valid JSON: {exc}") from exc
     validate_flow(data)
+    # A relative `cwd` is meant to live next to the flow file, not next to
+    # whatever directory the operator happened to call `aether` from.
+    base = Path(path).resolve().parent
+    for task in data["tasks"]:
+        if "cwd" in task:
+            cwd = Path(os.path.expanduser(task["cwd"]))
+            task["cwd"] = str(cwd if cwd.is_absolute() else base / cwd)
     return data
 
 
@@ -139,6 +146,23 @@ def validate_flow(data) -> None:
         retries = task.get("retries", 0)
         if not isinstance(retries, int) or isinstance(retries, bool) or not 0 <= retries <= MAX_RETRIES:
             errors.append(f"task {tid!r} 'retries' must be an integer 0..{MAX_RETRIES}")
+        cwd = task.get("cwd")
+        if cwd is not None and (not isinstance(cwd, str) or not cwd.strip()):
+            errors.append(f"task {tid!r} 'cwd' must be a non-empty string")
+        env = task.get("env")
+        if isinstance(env, dict):
+            # Inherit-by-name only: an inline map would put values, and therefore
+            # secrets, in a flow file that is committed and hashed into the db.
+            errors.append(
+                f"task {tid!r} 'env' must be a list of variable names, not an inline map "
+                "(values and secrets never belong in a flow file)"
+            )
+        elif env is not None:
+            if (
+                not isinstance(env, list)
+                or not all(isinstance(v, str) and v.strip() and "=" not in v for v in env)
+            ):
+                errors.append(f"task {tid!r} 'env' must be a list of non-empty variable names")
 
     ids = {t["id"] for t in tasks if isinstance(t, dict) and isinstance(t.get("id"), str)}
     for task in tasks:
@@ -251,17 +275,32 @@ def previous_status(conn, task_id: str, command_hash: str) -> str | None:
     return row[0] if row else None
 
 
-def execute(argv: list[str], timeout: int) -> tuple[str, int | None, str, str, str | None]:
-    """Run one attempt. No shell: argv is passed to the OS verbatim."""
-    proc = subprocess.Popen(
-        argv,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        errors="replace",
-        start_new_session=True,  # own process group, so a timeout kills the whole tree
-    )
+def execute(
+    argv: list[str], timeout: int, cwd: str | None = None, env: list[str] | None = None
+) -> tuple[str, int | None, str, str, str | None]:
+    """Run one attempt. No shell: argv is passed to the OS verbatim.
+
+    `cwd` defaults to the engine's own directory; `env` is a list of variable
+    names inherited from the engine's environment (a strict allowlist — anything
+    else is absent in the child), `None` inherits everything (M0 behaviour).
+    """
+    child_env = None if env is None else {k: os.environ[k] for k in env if k in os.environ}
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            env=child_env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            start_new_session=True,  # own process group, so a timeout kills the whole tree
+        )
+    except OSError as exc:
+        # A missing `cwd` or an unusable executable is a failed attempt, not a
+        # crashed engine: record it instead of leaving a `running` row behind.
+        return "failed", None, "", "", f"cannot start: {exc}"
     with LIVE_LOCK:
         LIVE.add(proc)
     try:
@@ -354,7 +393,9 @@ def _run_task(conn, run_id: int, task: dict, forced: set[str]) -> str:
     attempts = 0
     for attempts in range(1, retries + 2):
         print(f"running  {tid} (attempt {attempts}/{retries + 1})", flush=True)
-        status, code, out, err, errmsg = execute(task["argv"], timeout)
+        status, code, out, err, errmsg = execute(
+            task["argv"], timeout, task.get("cwd"), task.get("env")
+        )
         if status in ("succeeded", "interrupted"):
             break
         if attempts <= retries:

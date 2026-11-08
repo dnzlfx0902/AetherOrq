@@ -47,7 +47,9 @@ Before any process starts and before the database is created, the flow must pass
 2. `name` is a non-empty string; `tasks` is a non-empty list.
 3. Every task object uses only known keys, has a unique non-empty string `id`,
    a non-empty `argv` list of non-empty strings, `depends_on` as a list of
-   strings, `timeout` a positive int, `retries` an int in `0..10`.
+   strings, `timeout` a positive int, `retries` an int in `0..10`, `cwd` a
+   non-empty string when present, and `env` a list of variable names (an inline
+   map is rejected: §12).
 4. No self-dependency; every dependency names an existing task.
 5. The dependency graph is acyclic (Kahn's algorithm).
 
@@ -116,6 +118,7 @@ repeated runs of an unchanged flow keep skipping indefinitely.
 | task removed | its history stays in the DB; ignored by planning; any task still depending on it makes the flow invalid |
 | `argv` of task T changed | T re-runs (new `command_hash`); downstream unchanged tasks are **skipped** |
 | `timeout` / `retries` of T changed | T is skipped if it already succeeded — use `--force-task T` |
+| `cwd` / `env` of T changed | T is skipped if it already succeeded (identity is still `task_id` + `argv`) — use `--force-task T`; kept out of `command_hash` so existing databases resume across the upgrade |
 | dependency edges changed | graph re-validated; task identities are unchanged, so completed tasks stay skipped unless forced |
 | `name` / `description` changed | new `flow_hash` recorded; task decisions unchanged |
 
@@ -198,3 +201,31 @@ Only scheduling changes; every rule above still holds:
   kernel on exit, failure or crash, so a SIGKILL leaves no stale lock.
   `validate`, `status`, `logs` and `runs` do not take the lock.
 - Step 1 and step 2 are both delivered; M2 is closed.
+
+## 12. Per-task execution context (M3)
+
+A task may pin its working directory and the environment it inherits, so a flow
+no longer depends on the shell that launched it. No other rule changes.
+
+- `cwd` (optional, non-empty string): the directory the process starts in. A
+  relative value resolves against the **flow file's directory**, not the
+  engine's cwd. One absolute path is resolved once at load time, so `--db`,
+  resume and `logs` are unaffected.
+- A `cwd` that does not exist at execution time is a failed attempt: status
+  `failed`, exit code `NULL`, error `cannot start: …`. The engine does not crash
+  and does not leave a `running` row behind.
+- `env` (optional, list of variable names): a **strict allowlist**. The child
+  gets exactly the named variables that exist in the engine's environment;
+  every other variable is absent. A named but unset variable is simply absent —
+  it is never an error and never a literal placeholder.
+- Values never come from the flow file: `"env": {"TOKEN": "…"}` (an inline map)
+  is rejected at validation, with exit `2`, zero commands executed and no db
+  written. A non-list `env`, a non-string entry or a name containing `=` is
+  rejected the same way.
+- Omitting `env` keeps M0 behaviour: the child inherits the engine's whole
+  environment. Omitting `cwd` keeps M0 behaviour: the engine's cwd.
+- `cwd` and `env` are **not** part of `command_hash` (§2), exactly like
+  `timeout`/`retries`: changing them does not re-run a task that already
+  succeeded — use `--force-task T` (which also forces its dependents).
+- Paths and environment names are stored only in the flow file; the database
+  records argv, output and status as before, so §8.6 still applies.

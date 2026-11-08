@@ -46,6 +46,12 @@ Optional: `install -m755 aether.py ~/.local/bin/aether` to get `aether` on PATH.
 | `tasks[].depends_on` | no | list of task ids that must succeed first (default `[]`) |
 | `tasks[].timeout` | no | seconds per attempt, positive int (default `300`) |
 | `tasks[].retries` | no | extra attempts after a failure, `0..10` (default `0`) |
+| `tasks[].cwd` | no | working directory for the task (relative = next to the flow file; default: the engine's cwd) |
+| `tasks[].env` | no | list of variable **names** to inherit from the caller's environment; everything else is absent in the child (default: inherit everything). An inline map is rejected |
+
+`env` carries names only, never values: a flow file is committed and hashed into
+the database, so inline values would be inline secrets. A task with
+`"env": ["PATH", "HOME"]` sees only those two variables.
 
 Unknown keys are rejected, so typos fail loudly instead of being ignored.
 Validation covers: JSON syntax, types, duplicate ids, self-dependencies,
@@ -135,8 +141,8 @@ secrets in flow files or in commands — they are stored in the SQLite database
 python3 -m unittest discover -s tests -v
 ```
 
-36 end-to-end tests (M0's 15, M1's 9, 7 for `--jobs`, 5 for the writer lock). They
-drive the real CLI in subprocesses
+42 end-to-end tests (M0's 15, M1's 9, 7 for `--jobs`, 5 for the writer lock, 6 for
+per-task `cwd`/`env`). They drive the real CLI in subprocesses
 and inspect the real database: cycle rejected before execution, unknown/duplicate
 ids, shell string rejected, dependency order, failure propagation, bounded retries,
 process-tree kill on timeout, resume without re-running completed tasks across

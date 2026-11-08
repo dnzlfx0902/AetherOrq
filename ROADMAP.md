@@ -69,14 +69,25 @@ makes a second concurrent `run` fail with a clear error; the lock is released
 after a successful run, a failed run and a SIGKILLed run, and read-only
 commands still work while a run holds it.
 
-## M3 — Per-task execution context
+## M3 — Per-task execution context (delivered)
+
+Delivered: optional `cwd` per task (relative paths resolve against the flow
+file's directory) and an explicit `env` **allowlist of variable names** inherited
+from the caller's environment — everything else is absent in the child. Values
+never come from the flow file: an inline `env` map is rejected at validation,
+before any process starts and before the db is created. A missing `cwd` is a
+recorded `failed` attempt, not an engine crash. `command_hash` is unchanged, so
+existing databases resume across the upgrade; `--force-task` is still the way to
+re-run after changing `cwd`/`env`.
 
 Per-task `cwd` and an explicit environment allowlist (inherit-by-name only, no
 inline values in the flow file), so tasks stop depending on the caller's shell.
 
 Acceptance: a task with `cwd` runs there (asserted by a test reading `os.getcwd()`
 output); a variable not in the allowlist is absent in the child; no secret can be
-inlined in a flow file (inline maps rejected at validation).
+inlined in a flow file (inline maps rejected at validation). All three are
+covered by `tests/test_m3_context.py` (6 tests) and the full suite is 42 tests,
+`OK`.
 
 ## M4 — v1.0 packaging
 
