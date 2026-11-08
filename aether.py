@@ -39,6 +39,42 @@ class FlowError(Exception):
     """Invalid flow file: reported before anything is executed."""
 
 
+class LockHeld(Exception):
+    """Another process is already writing this db: a second writer is refused."""
+
+
+def writer_lock(db_path: str):
+    """Exclusive advisory lock on `<db>.lock`, held for the whole run (CONTRACT §8.2).
+
+    The kernel drops the lock when the holder dies, so a crashed run never leaves
+    a stale lock behind. The pid is written to the file for the refusal message.
+    """
+    import fcntl  # ponytail: Unix only; add msvcrt.locking if Windows is ever supported
+
+    db = Path(db_path).resolve()
+    lock_path = db.with_name(db.name + ".lock")
+    try:
+        handle = open(lock_path, "a+")
+    except OSError as exc:
+        raise LockHeld(f"cannot create lock file {lock_path}: {exc}") from exc
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        handle.seek(0)
+        holder = handle.read().strip() or "unknown"
+        handle.close()
+        raise LockHeld(
+            f"another `aether run` is already writing {db_path} "
+            f"(lock {lock_path}, pid {holder}); refusing to start a second writer"
+        ) from exc
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(os.getpid()))
+    handle.flush()
+    return handle
+
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -417,6 +453,18 @@ def _run_parallel(
 
 
 def run_flow(flow: dict, db_path: str, force_tasks: set[str] | None = None, jobs: int = 1) -> int:
+    # One writer per db: the lock is taken before the db is opened, so a refused
+    # run touches no state at all, and it is dropped when this process exits.
+    handle = writer_lock(db_path)
+    try:
+        return _run_flow_locked(flow, db_path, force_tasks, jobs)
+    finally:
+        handle.close()
+
+
+def _run_flow_locked(
+    flow: dict, db_path: str, force_tasks: set[str] | None = None, jobs: int = 1
+) -> int:
     force_tasks = force_tasks or set()
     order = topo_order(flow["tasks"])
     tasks = {t["id"]: t for t in flow["tasks"]}
@@ -668,7 +716,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ok: {flow['name']} ({len(flow['tasks'])} tasks)")
         return 0
     db_path = args.db or str(Path(args.flow).with_suffix(".db"))
-    return run_flow(flow, db_path, set(args.force_task), args.jobs)
+    try:
+        return run_flow(flow, db_path, set(args.force_task), args.jobs)
+    except LockHeld as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

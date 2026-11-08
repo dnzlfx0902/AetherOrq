@@ -5,3 +5,4 @@ __pycache__/
 *.db-shm
 demo-artifact.txt
 .pytest_cache/
+*.db.lock
