@@ -26,16 +26,31 @@ class ParallelRunTests(FlowTestCase):
         return {tid: status for tid, status, _, _ in self.rows()}
 
     def test_jobs_runs_independent_tasks_concurrently(self):
+        # Stamp start/end inside each task: overlap is asserted directly instead of
+        # against a wall-clock budget, which a loaded host can blow past.
+        marks = self.dir / "marks"
+        marks.mkdir()
+        code = (
+            "import time, pathlib; p = pathlib.Path({dir!r}) / {name!r}; "
+            "p.write_text(str(time.time())); time.sleep(1); "
+            "p.with_suffix('.end').write_text(str(time.time()))"
+        )
         tasks = [
-            {"id": f"s{n}", "argv": py("import time; time.sleep(1)")} for n in range(4)
+            {"id": f"s{n}", "argv": py(code.format(dir=str(marks), name=f"s{n}.start"))}
+            for n in range(4)
         ]
         flow = self.write_flow(tasks)
-        started = time.monotonic()
         res = self.run_jobs(flow, 4)
-        elapsed = time.monotonic() - started
         self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
-        # 4 x 1 s sequential would be >= 4 s; bounded parallelism must overlap them.
-        self.assertLess(elapsed, 2.5, f"--jobs 4 took {elapsed:.2f}s, tasks did not overlap")
+        starts = [float(p.read_text()) for p in marks.glob("*.start")]
+        ends = [float(p.read_text()) for p in marks.glob("*.end")]
+        self.assertEqual(len(starts), 4, f"only {len(starts)}/4 tasks stamped a start")
+        self.assertLess(
+            max(starts),
+            min(ends),
+            f"--jobs 4 did not overlap: all starts {sorted(starts)} must precede the "
+            f"first end {min(ends)}",
+        )
         self.assertEqual(set(self.statuses().values()), {"succeeded"})
 
     def test_jobs_never_starts_a_child_before_its_parent_succeeds(self):
@@ -125,6 +140,19 @@ class ParallelRunTests(FlowTestCase):
         while not started.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertTrue(started.exists(), "the task never started")
+        # Kill only once `quick` is durably recorded: killing inside its
+        # running-row window makes recovery legitimately report 2 attempts
+        # (the engine must treat that attempt as ambiguous), which is not what
+        # this test is about.
+        deadline = time.monotonic() + 20
+        quick_done = False
+        while time.monotonic() < deadline and not quick_done:
+            time.sleep(0.05)
+            conn = sqlite3.connect(self.db)
+            row = conn.execute("SELECT status FROM task_runs WHERE task_id='quick'").fetchone()
+            conn.close()
+            quick_done = bool(row) and row[0] == "succeeded"
+        self.assertTrue(quick_done, "the quick task was never recorded as succeeded")
         proc.send_signal(signal.SIGKILL)
         proc.wait(timeout=20)
         assert proc.stdout is not None and proc.stderr is not None
