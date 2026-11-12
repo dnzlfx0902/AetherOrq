@@ -140,6 +140,19 @@ class ParallelRunTests(FlowTestCase):
         while not started.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertTrue(started.exists(), "the task never started")
+        # Kill only once `quick` is durably recorded: killing inside its
+        # running-row window makes recovery legitimately report 2 attempts
+        # (the engine must treat that attempt as ambiguous), which is not what
+        # this test is about.
+        deadline = time.monotonic() + 20
+        quick_done = False
+        while time.monotonic() < deadline and not quick_done:
+            time.sleep(0.05)
+            conn = sqlite3.connect(self.db)
+            row = conn.execute("SELECT status FROM task_runs WHERE task_id='quick'").fetchone()
+            conn.close()
+            quick_done = bool(row) and row[0] == "succeeded"
+        self.assertTrue(quick_done, "the quick task was never recorded as succeeded")
         proc.send_signal(signal.SIGKILL)
         proc.wait(timeout=20)
         assert proc.stdout is not None and proc.stderr is not None
