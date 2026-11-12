@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aetherorq"
+version = "1.0.0"
+description = "Persistent local task-flow engine: a JSON DAG of local commands, SQLite state, resume"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = []
+
+[project.scripts]
+aether = "aether:main"
+
+[tool.setuptools]
+py-modules = ["aether"]

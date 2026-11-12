@@ -6,3 +6,6 @@ __pycache__/
 demo-artifact.txt
 .pytest_cache/
 *.db.lock
+build/
+dist/
+*.egg-info/
