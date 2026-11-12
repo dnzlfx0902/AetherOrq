@@ -12,17 +12,18 @@ agent framework yet.
 
 ## Requirements
 
-Python 3.10+ (stdlib only; developed and tested on 3.14). Nothing to install.
+Python 3.10+ (stdlib only; developed and tested on 3.14). No runtime dependencies.
 
 ## Install
 
 ```bash
-git clone https://github.com/dnzlfx0902/AetherOrq.git
-cd AetherOrq
-python3 aether.py --help        # no install step; run it from the checkout
+python3 -m venv .venv && . .venv/bin/activate
+pip install .
+aether --help
 ```
 
-Optional: `install -m755 aether.py ~/.local/bin/aether` to get `aether` on PATH.
+That installs the `aether` console script. From a checkout you can also run
+`python3 aether.py --help` with no install step.
 
 ## Flow format
 
