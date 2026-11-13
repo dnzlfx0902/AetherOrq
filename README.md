@@ -142,8 +142,8 @@ secrets in flow files or in commands — they are stored in the SQLite database
 python3 -m unittest discover -s tests -v
 ```
 
-47 end-to-end tests (M0's 15, M1's 9, 7 for `--jobs`, 5 for the writer lock, 6 for
-per-task `cwd`/`env`, 5 for packaging). They drive the real CLI in subprocesses
+48 end-to-end tests (M0's 15, M1's 9, 7 for `--jobs`, 5 for the writer lock, 6 for
+per-task `cwd`/`env`, 6 for packaging). They drive the real CLI in subprocesses
 and inspect the real database: cycle rejected before execution, unknown/duplicate
 ids, shell string rejected, dependency order, failure propagation, bounded retries,
 process-tree kill on timeout, resume without re-running completed tasks across

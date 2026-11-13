@@ -59,6 +59,21 @@ class PackagingMetadataTest(unittest.TestCase):
         self.assertEqual(int(match.group(1)), suite.countTestCases())
 
 
+class CliVersionTest(unittest.TestCase):
+    """No tomllib skip: `--version` must work on the 3.10 floor too."""
+
+    def test_cli_version_flag(self):
+        done = subprocess.run(
+            [sys.executable, "aether.py", "--version"],
+            cwd=ROOT, capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(done.returncode, 0, f"aether --version rc={done.returncode}: {done.stderr}")
+        self.assertIn("aether 1.0.0", done.stdout)
+        if tomllib is not None:
+            declared = tomllib.loads(PYPROJECT.read_text())["project"]["version"]
+            self.assertEqual(done.stdout.strip(), f"aether {declared}")
+
+
 class CleanVenvInstallTest(unittest.TestCase):
     def test_pip_install_then_aether_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,7 +93,7 @@ class CleanVenvInstallTest(unittest.TestCase):
                     self.skipTest(f"build backend unreachable (offline): {detail.strip()[-300:]}")
                 self.fail(f"pip install . failed (rc={install.returncode}):\n{detail}")
 
-            for args in (["--help"], ["validate", str(ROOT / "examples" / "flow.json")]):
+            for args in (["--help"], ["--version"], ["validate", str(ROOT / "examples" / "flow.json")]):
                 done = subprocess.run([aether, *args], capture_output=True, text=True, timeout=120)
                 self.assertEqual(done.returncode, 0, f"aether {args} rc={done.returncode}: {done.stderr}")
             self.assertIn("usage: aether", subprocess.run([aether, "--help"], capture_output=True, text=True).stdout)
