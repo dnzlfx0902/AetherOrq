@@ -6,7 +6,7 @@ pause belongs at the **close of that whole agreed scope/release**, not after any
 single milestone (M0 included); nothing outside the agreed scope is committed
 without an explicit decision at that point.
 
-## M0 — Kernel and persistence (this release)
+## M0 — Kernel and persistence (first release)
 
 Delivered: JSON flow, full validation and cycle detection before execution,
 explicit `argv` without shell, deterministic sequential DAG execution, bounded
@@ -86,7 +86,7 @@ inline values in the flow file), so tasks stop depending on the caller's shell.
 Acceptance: a task with `cwd` runs there (asserted by a test reading `os.getcwd()`
 output); a variable not in the allowlist is absent in the child; no secret can be
 inlined in a flow file (inline maps rejected at validation). All three are
-covered by `tests/test_m3_context.py` (6 tests) and the full suite is 42 tests,
+covered by `tests/test_m3_context.py` (6 tests) and the full suite stays green,
 `OK`.
 
 ## M4 — v1.0 packaging

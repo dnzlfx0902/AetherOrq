@@ -142,8 +142,8 @@ secrets in flow files or in commands — they are stored in the SQLite database
 python3 -m unittest discover -s tests -v
 ```
 
-42 end-to-end tests (M0's 15, M1's 9, 7 for `--jobs`, 5 for the writer lock, 6 for
-per-task `cwd`/`env`). They drive the real CLI in subprocesses
+47 end-to-end tests (M0's 15, M1's 9, 7 for `--jobs`, 5 for the writer lock, 6 for
+per-task `cwd`/`env`, 5 for packaging). They drive the real CLI in subprocesses
 and inspect the real database: cycle rejected before execution, unknown/duplicate
 ids, shell string rejected, dependency order, failure propagation, bounded retries,
 process-tree kill on timeout, resume without re-running completed tasks across
@@ -155,7 +155,7 @@ writer lock (second run refused, release after success/failure/SIGKILL).
 ## Roadmap
 
 Short, milestone-based, each with verifiable acceptance. Details in
-[ROADMAP.md](ROADMAP.md). M0 is this release; work then continues in the agreed
+[ROADMAP.md](ROADMAP.md). M0 is the first release; work then continues in the agreed
 cycle until the whole agreed scope is closed — the pause belongs at the end of
 that scope, not after M0.
 
