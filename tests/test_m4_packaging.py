@@ -50,6 +50,14 @@ class PackagingMetadataTest(unittest.TestCase):
     def test_no_runtime_dependencies(self):
         self.assertEqual(self.data["project"]["dependencies"], [])
 
+    def test_readme_test_count_matches_suite(self):
+        """README's stated count is hand-written; keep it honest."""
+        match = re.search(r"(\d+) end-to-end tests", (ROOT / "README.md").read_text())
+        if match is None:
+            self.fail("README no longer states the suite size")
+        suite = unittest.TestLoader().discover(str(ROOT / "tests"))
+        self.assertEqual(int(match.group(1)), suite.countTestCases())
+
 
 class CleanVenvInstallTest(unittest.TestCase):
     def test_pip_install_then_aether_runs(self):
