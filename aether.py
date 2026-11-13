@@ -699,8 +699,25 @@ def show_logs(db_path: str, task_id: str, lines: int) -> int:
     return 0
 
 
+def _version() -> str:
+    """Installed distribution version, or the source-tree fallback.
+
+    `python3 aether.py --version` runs from a checkout where the distribution
+    metadata does not exist, so PackageNotFoundError is the normal case there.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("aetherorq")
+    except PackageNotFoundError:
+        return "1.0.0"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aether", description="AetherOrq local task-flow engine")
+    parser.add_argument(
+        "--version", action="version", version=f"aether {_version()}"
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_run = sub.add_parser("run", help="validate and execute a flow")
