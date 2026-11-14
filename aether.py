@@ -700,17 +700,29 @@ def show_logs(db_path: str, task_id: str, lines: int) -> int:
 
 
 def _version() -> str:
-    """Installed distribution version, or the source-tree fallback.
+    """Installed distribution version, else the version pyproject declares.
 
     `python3 aether.py --version` runs from a checkout where the distribution
     metadata does not exist, so PackageNotFoundError is the normal case there.
+    The fallback reads pyproject.toml instead of repeating the number, so a
+    version bump cannot leave the CLI reporting a stale one.
     """
     from importlib.metadata import PackageNotFoundError, version
 
     try:
         return version("aetherorq")
     except PackageNotFoundError:
-        return "1.0.0"
+        pass
+
+    pyproject = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pyproject.toml")
+    if os.path.exists(pyproject):
+        with open(pyproject, encoding="utf-8") as fh:
+            for line in fh:
+                # The [project] table's `version`; build-system keys have none.
+                key, sep, value = line.partition("=")
+                if sep and key.strip() == "version":
+                    return value.strip().strip("\"'")
+    return "unknown"
 
 
 def main(argv: list[str] | None = None) -> int:
