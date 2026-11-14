@@ -68,7 +68,7 @@ class CliVersionTest(unittest.TestCase):
             cwd=ROOT, capture_output=True, text=True, timeout=120,
         )
         self.assertEqual(done.returncode, 0, f"aether --version rc={done.returncode}: {done.stderr}")
-        self.assertIn("aether 1.0.0", done.stdout)
+        self.assertRegex(done.stdout.strip(), r"^aether \d+\.\d+\.\d+")
         if tomllib is not None:
             declared = tomllib.loads(PYPROJECT.read_text())["project"]["version"]
             self.assertEqual(done.stdout.strip(), f"aether {declared}")
