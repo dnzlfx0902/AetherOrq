@@ -20,10 +20,13 @@ Python 3.10+ (stdlib only; developed and tested on 3.14). No runtime dependencie
 python3 -m venv .venv && . .venv/bin/activate
 pip install .
 aether --help
+aether --version
 ```
 
-That installs the `aether` console script. From a checkout you can also run
-`python3 aether.py --help` with no install step.
+That installs the `aether` console script. `aether --version` reports the
+installed distribution's version; from a checkout `python3 aether.py --version`
+reads the number `pyproject.toml` declares instead. From a checkout you can also
+run `python3 aether.py --help` with no install step.
 
 ## Flow format
 

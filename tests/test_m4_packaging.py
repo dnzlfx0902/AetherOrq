@@ -93,10 +93,24 @@ class CleanVenvInstallTest(unittest.TestCase):
                     self.skipTest(f"build backend unreachable (offline): {detail.strip()[-300:]}")
                 self.fail(f"pip install . failed (rc={install.returncode}):\n{detail}")
 
-            for args in (["--help"], ["--version"], ["validate", str(ROOT / "examples" / "flow.json")]):
-                done = subprocess.run([aether, *args], capture_output=True, text=True, timeout=120)
+            # Run from outside the checkout: an installed command must not need it.
+            for args in (["--help"], ["validate", str(ROOT / "examples" / "flow.json")]):
+                done = subprocess.run([aether, *args], cwd=tmp, capture_output=True, text=True, timeout=120)
                 self.assertEqual(done.returncode, 0, f"aether {args} rc={done.returncode}: {done.stderr}")
-            self.assertIn("usage: aether", subprocess.run([aether, "--help"], capture_output=True, text=True).stdout)
+            help_text = subprocess.run([aether, "--help"], cwd=tmp, capture_output=True, text=True).stdout
+            self.assertIn("usage: aether", help_text)
+
+            # Distribution metadata is what the console script reports: the
+            # checkout fallback cannot help here, so "unknown" or a stale number
+            # means the installed package is misnamed or misversioned.
+            declared = re.search(r'^version = "([^"]+)"', PYPROJECT.read_text(), re.M)
+            if declared is None:
+                self.fail("pyproject.toml declares no version")
+            reported = subprocess.run(
+                [aether, "--version"], cwd=tmp, capture_output=True, text=True, timeout=120
+            )
+            self.assertEqual(reported.returncode, 0, f"aether --version rc={reported.returncode}: {reported.stderr}")
+            self.assertEqual(reported.stdout.strip(), f"aether {declared.group(1)}")
 
 
 if __name__ == "__main__":
