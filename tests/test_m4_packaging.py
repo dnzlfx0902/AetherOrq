@@ -58,6 +58,22 @@ class PackagingMetadataTest(unittest.TestCase):
         suite = unittest.TestLoader().discover(str(ROOT / "tests"))
         self.assertEqual(int(match.group(1)), suite.countTestCases())
 
+    def test_ci_matrix_runs_every_supported_python(self):
+        """M4 acceptance: CI green on *every* supported version.
+
+        The matrix once silently lost the declared floor, so the claim is checked,
+        not trusted: the first entry must be `requires-python`'s floor and the
+        versions must be contiguous from there.
+        """
+        floor = tuple(int(part) for part in self.data["project"]["requires-python"].removeprefix(">=").split("."))
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        block = re.search(r"python-version:\s*\[([^\]]*)\]", workflow)
+        if block is None:
+            self.fail("ci.yml declares no python-version matrix")
+        versions = [tuple(int(part) for part in v.split(".")) for v in re.findall(r'"(\d+\.\d+)"', block.group(1))]
+        expected = [(floor[0], minor) for minor in range(floor[1], versions[-1][1] + 1)] if versions else []
+        self.assertEqual(versions, expected, f"ci.yml matrix {versions} must be a contiguous run from the floor {floor}")
+
 
 class CliVersionTest(unittest.TestCase):
     """No tomllib skip: `--version` must work on the 3.10 floor too."""
