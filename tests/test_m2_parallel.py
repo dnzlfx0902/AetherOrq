@@ -193,10 +193,12 @@ class ParallelRunTests(FlowTestCase):
             if self.db.exists():
                 try:
                     conn = sqlite3.connect(self.db)
-                    running = conn.execute(
-                        "SELECT COUNT(*) FROM task_runs WHERE status='running'"
-                    ).fetchone()[0]
-                    conn.close()
+                    try:
+                        running = conn.execute(
+                            "SELECT COUNT(*) FROM task_runs WHERE status='running'"
+                        ).fetchone()[0]
+                    finally:
+                        conn.close()
                 except sqlite3.OperationalError:
                     pass  # the schema is still being created
         self.assertEqual(running, 2, "both tasks should be in flight")
