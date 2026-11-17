@@ -20,6 +20,8 @@ except ModuleNotFoundError:  # pragma: no cover
 
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"
+AETHER = ROOT / "aether.py"
+CONTRACT = ROOT / "CONTRACT.md"
 OFFLINE_MARKERS = ("Network", "Temporary failure", "Connection", "ProxyError", "Could not find a version")
 
 
@@ -50,6 +52,12 @@ class PackagingMetadataTest(unittest.TestCase):
     def test_no_runtime_dependencies(self):
         self.assertEqual(self.data["project"]["dependencies"], [])
 
+    def test_contract_states_the_declared_python_floor(self):
+        """The normative document must name the floor it declares support for."""
+        floor = self.data["project"]["requires-python"].removeprefix(">=")
+        documented = re.findall(r"Python (\d+\.\d+)\+", (ROOT / "CONTRACT.md").read_text())
+        self.assertIn(floor, documented, f"CONTRACT.md states Python {documented}, pyproject declares >={floor}")
+
     def test_readme_test_count_matches_suite(self):
         """README's stated count is hand-written; keep it honest."""
         match = re.search(r"(\d+) end-to-end tests", (ROOT / "README.md").read_text())
@@ -73,6 +81,19 @@ class PackagingMetadataTest(unittest.TestCase):
         versions = [tuple(int(part) for part in v.split(".")) for v in re.findall(r'"(\d+\.\d+)"', block.group(1))]
         expected = [(floor[0], minor) for minor in range(floor[1], versions[-1][1] + 1)] if versions else []
         self.assertEqual(versions, expected, f"ci.yml matrix {versions} must be a contiguous run from the floor {floor}")
+
+
+class ContractDocsTest(unittest.TestCase):
+    """CONTRACT.md calls itself normative, so every option the CLI accepts must
+    appear there. It documented none of the packaging surface: `--version`, the
+    `aether` console script and the supported Python floor were missing."""
+
+    def test_every_cli_option_is_documented(self):
+        options = set(re.findall(r'"(--[a-z][a-z-]*)"', AETHER.read_text()))
+        self.assertTrue(options, "no CLI options found in aether.py")
+        contract = CONTRACT.read_text()
+        missing = sorted(option for option in options if option not in contract)
+        self.assertEqual(missing, [], f"CONTRACT.md never documents {missing}")
 
 
 class CliVersionTest(unittest.TestCase):

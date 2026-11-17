@@ -229,3 +229,19 @@ no longer depends on the shell that launched it. No other rule changes.
   succeeded — use `--force-task T` (which also forces its dependents).
 - Paths and environment names are stored only in the flow file; the database
   records argv, output and status as before, so §8.6 still applies.
+
+## 13. Distribution and version (M4)
+
+One module (`aether.py`) and its metadata, standard library only, no runtime
+dependencies. Python 3.10+ is the supported floor; CI runs the suite on every
+minor from that floor upwards.
+
+- `pip install .` installs the distribution `aetherorq` into the target
+  environment and places an `aether` console script on its `PATH`. Installation
+  writes nothing else: no database, no `<db>.lock`, no user config.
+- `aether --version` prints `aether <version>` and exits `0`. The number comes
+  from the installed distribution metadata; from an uninstalled checkout the
+  fallback reads `[project] version` in `pyproject.toml`, so the CLI cannot
+  report a stale version. It opens no database and takes no other option.
+- `--version` is read-only like `status`, `logs` and `runs` (§8.2, §10): it never
+  takes the writer lock and works while a `run` holds it.
