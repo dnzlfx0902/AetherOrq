@@ -214,6 +214,22 @@ class ParallelRunTests(FlowTestCase):
         self.assertEqual(conn.execute("SELECT status FROM runs").fetchone()[0], "interrupted")
         conn.close()
 
+    def test_interrupt_never_spawns_a_child_after_the_kill_sweep(self):
+        # The shutdown only kills what is in LIVE, so a child spawned after the
+        # sweep would be waited on for its whole timeout and Ctrl-C would hang.
+        # `execute` sets the flag and spawns under LIVE_LOCK for exactly that
+        # reason; here the flag is set first, as kill_live does.
+        sys.path.insert(0, str(AETHER.parent))
+        import aether  # noqa: PLC0415 - the engine is a script, imported once here
+
+        aether.INTERRUPTED.set()
+        try:
+            status, _code, _out, _err, errmsg = aether.execute([sys.executable, "-c", "pass"], 5)
+        finally:
+            aether.INTERRUPTED.clear()
+        self.assertEqual(status, "interrupted")
+        self.assertIn("before the child started", errmsg or "")
+
     def test_jobs_rejects_non_positive_values(self):
         flow = self.write_flow([{"id": "a", "argv": py("pass")}])
         res = self.run_jobs(flow, 0)

@@ -285,23 +285,28 @@ def execute(
     else is absent in the child), `None` inherits everything (M0 behaviour).
     """
     child_env = None if env is None else {k: os.environ[k] for k in env if k in os.environ}
-    try:
-        proc = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=child_env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            start_new_session=True,  # own process group, so a timeout kills the whole tree
-        )
-    except OSError as exc:
-        # A missing `cwd` or an unusable executable is a failed attempt, not a
-        # crashed engine: record it instead of leaving a `running` row behind.
-        return "failed", None, "", "", f"cannot start: {exc}"
+    # Spawn and register under LIVE_LOCK: an interrupt that lands between the two
+    # would otherwise miss this child (kill_live sees an empty set), and the pool
+    # join would then wait for the task's whole timeout on a child nobody kills.
     with LIVE_LOCK:
+        if INTERRUPTED.is_set():
+            return "interrupted", None, "", "", "interrupted before the child started"
+        try:
+            proc = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=child_env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+                start_new_session=True,  # own process group, so a timeout kills the whole tree
+            )
+        except OSError as exc:
+            # A missing `cwd` or an unusable executable is a failed attempt, not a
+            # crashed engine: record it instead of leaving a `running` row behind.
+            return "failed", None, "", "", f"cannot start: {exc}"
         LIVE.add(proc)
     try:
         try:
@@ -332,8 +337,11 @@ def execute(
 
 def kill_live() -> None:
     """Kill every child still in flight (parallel runs; each has its own group)."""
-    INTERRUPTED.set()
+    # The flag is set under LIVE_LOCK so it is atomic with `execute`'s
+    # check-then-spawn: a child is either in LIVE here (and gets killed) or it is
+    # never started at all.
     with LIVE_LOCK:
+        INTERRUPTED.set()
         procs = list(LIVE)
     for proc in procs:
         try:
