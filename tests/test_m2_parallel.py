@@ -230,6 +230,56 @@ class ParallelRunTests(FlowTestCase):
         self.assertEqual(status, "interrupted")
         self.assertIn("before the child started", errmsg or "")
 
+    def test_jobs_keeps_sigint_away_from_the_pool_threads(self):
+        # A SIGINT sent to the process can be delivered to any thread. A worker that
+        # takes it while blocked in communicate() swallows it: the main thread keeps
+        # waiting and the run is only over when the task's timeout expires. The pool
+        # threads are therefore born with SIGINT blocked, so the main thread is the
+        # only receiver. Checked through /proc because the kernel, not the code,
+        # picks the thread.
+        proc = subprocess.Popen(
+            [sys.executable, str(AETHER), "run", str(self.write_flow([
+                {"id": "a", "argv": py("import time; time.sleep(20)")},
+                {"id": "b", "argv": py("import time; time.sleep(20)")},
+            ])), "--db", str(self.db), "--jobs", "2"],
+            cwd=self.dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        deadline = time.monotonic() + 20
+        running = 0
+        while time.monotonic() < deadline and running < 2:
+            time.sleep(0.05)
+            if self.db.exists():
+                try:
+                    conn = sqlite3.connect(self.db)
+                    try:
+                        running = conn.execute(
+                            "SELECT COUNT(*) FROM task_runs WHERE status='running'"
+                        ).fetchone()[0]
+                    finally:
+                        conn.close()
+                except sqlite3.OperationalError:
+                    pass  # the schema is still being created
+        self.assertEqual(running, 2, "both tasks should be in flight")
+        bit = 1 << (signal.SIGINT - 1)
+        masks = {}
+        for task_dir in Path(f"/proc/{proc.pid}/task").iterdir():
+            status = (task_dir / "status").read_text().splitlines()
+            sigblk = next(line.split()[1] for line in status if line.startswith("SigBlk"))
+            masks[task_dir.name] = int(sigblk, 16)
+        main = masks.pop(str(proc.pid), None)
+        self.assertIsNotNone(main, "the engine's main thread should be listed")
+        self.assertFalse(main & bit, "the main thread must be able to take Ctrl-C")
+        self.assertEqual(len(masks), 2, "one pool thread per job should be alive")
+        for tid, mask in masks.items():
+            self.assertTrue(mask & bit, f"pool thread {tid} must block SIGINT")
+        proc.send_signal(signal.SIGINT)
+        try:
+            out, err = proc.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            self.fail("--jobs run did not stop on Ctrl-C")
+        self.assertEqual(proc.returncode, 130, out + err)
+
     def test_jobs_rejects_non_positive_values(self):
         flow = self.write_flow([{"id": "a", "argv": py("pass")}])
         res = self.run_jobs(flow, 0)

@@ -476,7 +476,18 @@ def _run_parallel(
                             ready.append(child)
                     ready.sort()
                     continue
-                inflight[pool.submit(_task_worker, db_path, run_id, task, forced)] = tid
+                # A SIGINT sent to the process may be delivered to any thread, and
+                # the pool spawns its threads here: one taking the interrupt while
+                # blocked in Popen/communicate consumes it with nobody to act, the
+                # main thread stays in wait() and the run is waited out to the task's
+                # timeout. Block it while a worker is born so only the main thread
+                # can receive it; subprocess resets the mask in the children.
+                old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+                try:
+                    job = pool.submit(_task_worker, db_path, run_id, task, forced)
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+                inflight[job] = tid
             if not inflight:
                 continue
             done, _ = wait(inflight, return_when=FIRST_COMPLETED)
