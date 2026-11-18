@@ -7,8 +7,8 @@ task as an explicit `argv` list (never through a shell), and records every
 attempt in SQLite. If a run is interrupted, re-running the same command resumes:
 tasks that already succeeded with the same command are not executed again.
 
-This is the first increment: the kernel, not the product. No UI, no AI, no
-agent framework yet.
+Scope: the engine and its operator tooling (`logs`, `runs`, `--jobs`, per-task
+`cwd`/`env`), not a product surface. No UI, no AI, no agent framework yet.
 
 ## Requirements
 
@@ -81,8 +81,9 @@ real end and is labelled `capture truncated`. `runs` lists each run with its
 status, task/failure counts and duration.
 
 `run` exit codes: `0` every task succeeded (or was already done), `1` at least
-one task failed/blocked, `2` invalid flow, unreadable file, or another `aether
-run` already writing that db, `130` interrupted by Ctrl-C.
+one task failed/blocked, `2` invalid flow, unreadable file, a `--db` that is not
+an AetherOrq database, or another `aether run` already writing that db, `130`
+interrupted by Ctrl-C.
 
 Each run prints one line per task:
 
@@ -145,7 +146,7 @@ secrets in flow files or in commands — they are stored in the SQLite database
 python3 -m unittest discover -s tests -v
 ```
 
-50 end-to-end tests (M0's 15, M1's 9, 7 for `--jobs`, 6 for the writer lock, 6 for
+52 end-to-end tests (M0's 15, M1's 11, 7 for `--jobs`, 6 for the writer lock, 6 for
 per-task `cwd`/`env`, 7 for packaging). They drive the real CLI in subprocesses
 and inspect the real database: cycle rejected before execution, unknown/duplicate
 ids, shell string rejected, dependency order, failure propagation, bounded retries,
