@@ -110,5 +110,41 @@ class OperatorVisibilityTests(FlowTestCase):
         self.assertEqual(data["tasks"][0]["status"], "succeeded")
 
 
+class ForeignDbTests(FlowTestCase):
+    """A `--db` that is not an AetherOrq database is operator error: exit 2.
+
+    Before, `status`/`runs`/`logs` and `run` let sqlite3's DatabaseError escape,
+    so a typo (`--db notes.txt`) printed a traceback and exited 1 — the code that
+    means "a task failed", although nothing ran.
+    """
+
+    def foreign_db(self):
+        path = self.dir / "not-aether.db"
+        path.write_bytes(b"not a database")
+        return path
+
+    def test_read_only_commands_refuse_a_foreign_db(self):
+        db = self.foreign_db()
+        for args in (
+            ("status", "--db", str(db)),
+            ("runs", "--db", str(db)),
+            ("logs", "--db", str(db), "--task", "job"),
+        ):
+            res = self.cli(*args)
+            self.assertEqual(res.returncode, 2, f"{args[0]}: {res.stderr}")
+            self.assertIn("as an AetherOrq database", res.stderr)
+            self.assertNotIn("Traceback", res.stderr)
+
+    def test_run_refuses_a_foreign_db_and_executes_nothing(self):
+        db = self.foreign_db()
+        marker = self.dir / "ran"
+        flow = self.write_flow([{"id": "job", "argv": py(f"open({str(marker)!r}, 'w').close()")}])
+        res = self.cli("run", str(flow), "--db", str(db))
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("as an AetherOrq database", res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertFalse(marker.exists(), "no command may run when the db is unusable")
+
+
 if __name__ == "__main__":
     unittest.main()

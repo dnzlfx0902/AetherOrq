@@ -43,6 +43,10 @@ class LockHeld(Exception):
     """Another process is already writing this db: a second writer is refused."""
 
 
+class DbError(Exception):
+    """`--db` points at a file that is not an AetherOrq database (operator error)."""
+
+
 def writer_lock(db_path: str):
     """Exclusive advisory lock on `<db>.lock`, held for the whole run (CONTRACT §8.2).
 
@@ -231,9 +235,15 @@ CREATE INDEX IF NOT EXISTS task_runs_lookup ON task_runs(task_id, command_hash, 
 def connect(db_path: str) -> sqlite3.Connection:
     # `timeout`: parallel workers each write short rows; WAL serialises writers.
     conn = sqlite3.connect(db_path, timeout=30)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(SCHEMA)
+    except sqlite3.DatabaseError as exc:
+        # A foreign or corrupt file at `--db` is operator error, not a task
+        # failure: refuse it with exit 2 instead of a traceback and rc 1.
+        conn.close()
+        raise DbError(f"cannot use {db_path} as an AetherOrq database: {exc}") from exc
     return conn
 
 
@@ -771,24 +781,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "run" and args.jobs < 1:
         print("--jobs must be an integer >= 1", file=sys.stderr)
         return 2
-    if args.cmd == "status":
-        return show_status(args.db, args.json)
-    if args.cmd == "logs":
-        return show_logs(args.db, args.task, args.lines)
-    if args.cmd == "runs":
-        return show_runs(args.db, args.json)
     try:
-        flow = load_flow(args.flow)
-    except FlowError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    if args.cmd == "validate":
-        print(f"ok: {flow['name']} ({len(flow['tasks'])} tasks)")
-        return 0
-    db_path = args.db or str(Path(args.flow).with_suffix(".db"))
-    try:
+        if args.cmd == "status":
+            return show_status(args.db, args.json)
+        if args.cmd == "logs":
+            return show_logs(args.db, args.task, args.lines)
+        if args.cmd == "runs":
+            return show_runs(args.db, args.json)
+        try:
+            flow = load_flow(args.flow)
+        except FlowError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.cmd == "validate":
+            print(f"ok: {flow['name']} ({len(flow['tasks'])} tasks)")
+            return 0
+        db_path = args.db or str(Path(args.flow).with_suffix(".db"))
         return run_flow(flow, db_path, set(args.force_task), args.jobs)
-    except LockHeld as exc:
+    except (DbError, LockHeld) as exc:
         print(str(exc), file=sys.stderr)
         return 2
 

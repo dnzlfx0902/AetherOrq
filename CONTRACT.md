@@ -147,6 +147,9 @@ engine deliberately does not guess whether a downstream result is still valid.
    treat the db as sensitive and never place secrets in commands or flow files.
 7. Removing state = delete the db file. Code rollback = `git revert`; never
    delete the repository or rewrite published history.
+8. `--db` must be an AetherOrq database. A foreign or corrupt file (a typo, another
+   tool's db) is refused with exit `2` and a clear message before anything runs —
+   never a traceback, and never exit `1`, which means a task failed.
 
 ## 9. Non-goals in M0
 

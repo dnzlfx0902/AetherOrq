@@ -7,11 +7,13 @@ These tests drive the real CLI in subprocesses and assert exclusion, release on
 success/failure/crash, and the refusal message.
 Run: python3 -m unittest discover -s tests -v
 """
+import gc
 import sqlite3
 import subprocess
 import sys
 import time
 import unittest
+import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -36,14 +38,15 @@ class WriterLockTests(FlowTestCase):
             time.sleep(0.05)
             if not self.db.exists():
                 continue
+            conn = sqlite3.connect(self.db)
             try:
-                conn = sqlite3.connect(self.db)
                 running = conn.execute(
                     "SELECT COUNT(*) FROM task_runs WHERE status='running'"
                 ).fetchone()[0]
-                conn.close()
             except sqlite3.OperationalError:
                 continue  # schema still being created
+            finally:
+                conn.close()
             if running >= count:
                 return True
         return False
@@ -54,6 +57,20 @@ class WriterLockTests(FlowTestCase):
             return conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
         finally:
             conn.close()
+
+    def test_polling_an_uninitialised_db_does_not_leak_the_connection(self):
+        # Regression: the "schema still being created" branch exited without close(),
+        # so every poll of a db whose schema is missing leaked a sqlite connection.
+        sqlite3.connect(self.db).close()  # the file exists, the schema does not
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.assertFalse(self.wait_until_running(deadline=1))
+            gc.collect()
+        leaked = [
+            w for w in caught
+            if issubclass(w.category, ResourceWarning) and "unclosed database" in str(w.message)
+        ]
+        self.assertEqual(leaked, [], "polling must not leak sqlite connections")
 
     def test_second_concurrent_run_is_refused(self):
         flow = self.write_flow([{"id": "slow", "argv": py("import time; time.sleep(3)")}])
