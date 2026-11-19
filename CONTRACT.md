@@ -157,7 +157,10 @@ environment or working-directory configuration, `inspect` subcommands.
 ## 10. Read-only inspection (M1)
 
 `logs`, `runs` and `status` only read the database. They add no execution
-semantics and cannot change a task's status.
+semantics and cannot change a task's status. A `--db` that is not an AetherOrq
+database (another tool's sqlite file, a typo) exits `2` before any schema is
+created: the file is left byte-for-byte unchanged, and is never reported as an
+empty flow.
 
 - `logs --db DB --task ID [--lines N]` reports the newest attempt that actually
   started a process (`skipped`/`blocked` rows never did) with its status, exit
