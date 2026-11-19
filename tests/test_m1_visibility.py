@@ -5,6 +5,7 @@ Reuses the M0 harness, which leaves tests/test_engine.py untouched.
 Run: python3 -m unittest discover -s tests -v
 """
 import json
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -108,6 +109,50 @@ class OperatorVisibilityTests(FlowTestCase):
         self.assertEqual(data["runs"], 1)
         self.assertEqual([t["task_id"] for t in data["tasks"]], ["a"])
         self.assertEqual(data["tasks"][0]["status"], "succeeded")
+
+
+class ReadOnlyCommandsNeverWriteTests(FlowTestCase):
+    """§10: `status`, `runs` and `logs` only read the database.
+
+    `connect()` creates the schema, so pointing a read-only command at somebody
+    else's sqlite file used to add `runs`/`task_runs` to it and exit 0 with "no
+    attempts recorded": the command wrote, and reported a foreign db as ours.
+    """
+
+    def foreign_db(self):
+        other = self.dir / "other.db"
+        conn = sqlite3.connect(other)
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO users (name) VALUES ('keep me')")
+        conn.commit()
+        conn.close()
+        return other
+
+    def test_foreign_sqlite_file_is_refused_and_untouched(self):
+        other = self.foreign_db()
+        before = other.read_bytes()
+        for args in (["status"], ["runs"], ["logs", "--task", "job"]):
+            with self.subTest(command=args[0]):
+                res = self.cli(*args, "--db", str(other))
+                self.assertEqual(res.returncode, 2, f"{args[0]} rc={res.returncode}: {res.stderr}")
+                self.assertIn("is not an AetherOrq database", res.stderr)
+                self.assertNotIn("Traceback", res.stderr)
+        self.assertEqual(other.read_bytes(), before, "a read-only command must not modify the file")
+        conn = sqlite3.connect(other)
+        try:
+            names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            conn.close()
+        self.assertEqual(names, {"users"}, f"foreign schema was modified: {sorted(names)}")
+
+    def test_non_sqlite_file_is_refused_without_a_traceback(self):
+        junk = self.dir / "notes.txt"
+        junk.write_text("not a database\n", encoding="utf-8")
+        res = self.cli("status", "--db", str(junk))
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("is not an AetherOrq database", res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertEqual(junk.read_text(encoding="utf-8"), "not a database\n")
 
 
 if __name__ == "__main__":
