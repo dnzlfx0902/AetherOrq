@@ -566,6 +566,17 @@ def _require_db(db_path: str) -> bool:
     (§10). Checking `sqlite_master` first is a pure read, and on our own db the
     later DDL is a no-op.
     """
+    # Names alone are not enough: a foreign sqlite with `runs`/`task_runs` of a
+    # different shape passed the table check, then SCHEMA's CREATE INDEX failed
+    # with a traceback *after* switching the file to WAL. Require the columns
+    # SCHEMA and the read queries need, so `connect()` is provably a no-op.
+    shape = {
+        "runs": ("run_id", "flow_name", "flow_hash", "started_at", "finished_at", "status"),
+        "task_runs": (
+            "attempt_id", "run_id", "task_id", "command_hash", "status", "attempts",
+            "exit_code", "started_at", "finished_at", "stdout", "stderr", "error",
+        ),
+    }
     if not Path(db_path).exists():
         print(f"no database at {db_path}", file=sys.stderr)
         return False
@@ -576,6 +587,17 @@ def _require_db(db_path: str) -> bool:
                 row[0]
                 for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
+            for table, columns in shape.items():
+                if table not in tables:
+                    continue
+                present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if not set(columns) <= present:
+                    print(
+                        f"{db_path} is not an AetherOrq database "
+                        f"({table} has another tool's schema)",
+                        file=sys.stderr,
+                    )
+                    return False
         finally:
             conn.close()
     except sqlite3.DatabaseError as exc:

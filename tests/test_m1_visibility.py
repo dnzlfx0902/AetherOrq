@@ -145,6 +145,34 @@ class ReadOnlyCommandsNeverWriteTests(FlowTestCase):
             conn.close()
         self.assertEqual(names, {"users"}, f"foreign schema was modified: {sorted(names)}")
 
+    def test_foreign_db_with_lookalike_tables_is_refused_and_untouched(self):
+        """H1: table names alone do not make it ours — the columns must match too."""
+        other = self.dir / "lookalike.db"
+        conn = sqlite3.connect(other)
+        conn.executescript(
+            "CREATE TABLE runs (rid INTEGER PRIMARY KEY);"
+            "CREATE TABLE task_runs (tid INTEGER PRIMARY KEY);"
+        )
+        conn.close()
+        before = other.read_bytes()
+
+        def journal_mode():
+            probe = sqlite3.connect(other)
+            try:
+                return probe.execute("PRAGMA journal_mode").fetchone()[0]
+            finally:
+                probe.close()
+
+        self.assertEqual(journal_mode(), "delete")
+        for args in (["status"], ["runs"], ["logs", "--task", "job"]):
+            with self.subTest(command=args[0]):
+                res = self.cli(*args, "--db", str(other))
+                self.assertEqual(res.returncode, 2, f"{args[0]} rc={res.returncode}: {res.stderr}")
+                self.assertIn("is not an AetherOrq database", res.stderr)
+                self.assertNotIn("Traceback", res.stderr)
+        self.assertEqual(other.read_bytes(), before, "a read-only command must not modify the file")
+        self.assertEqual(journal_mode(), "delete", "journal_mode must not be switched")
+
     def test_non_sqlite_file_is_refused_without_a_traceback(self):
         junk = self.dir / "notes.txt"
         junk.write_text("not a database\n", encoding="utf-8")
