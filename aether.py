@@ -285,23 +285,28 @@ def execute(
     else is absent in the child), `None` inherits everything (M0 behaviour).
     """
     child_env = None if env is None else {k: os.environ[k] for k in env if k in os.environ}
-    try:
-        proc = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=child_env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            start_new_session=True,  # own process group, so a timeout kills the whole tree
-        )
-    except OSError as exc:
-        # A missing `cwd` or an unusable executable is a failed attempt, not a
-        # crashed engine: record it instead of leaving a `running` row behind.
-        return "failed", None, "", "", f"cannot start: {exc}"
+    # Spawn and register under LIVE_LOCK: an interrupt that lands between the two
+    # would otherwise miss this child (kill_live sees an empty set), and the pool
+    # join would then wait for the task's whole timeout on a child nobody kills.
     with LIVE_LOCK:
+        if INTERRUPTED.is_set():
+            return "interrupted", None, "", "", "interrupted before the child started"
+        try:
+            proc = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=child_env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+                start_new_session=True,  # own process group, so a timeout kills the whole tree
+            )
+        except OSError as exc:
+            # A missing `cwd` or an unusable executable is a failed attempt, not a
+            # crashed engine: record it instead of leaving a `running` row behind.
+            return "failed", None, "", "", f"cannot start: {exc}"
         LIVE.add(proc)
     try:
         try:
@@ -332,8 +337,11 @@ def execute(
 
 def kill_live() -> None:
     """Kill every child still in flight (parallel runs; each has its own group)."""
-    INTERRUPTED.set()
+    # The flag is set under LIVE_LOCK so it is atomic with `execute`'s
+    # check-then-spawn: a child is either in LIVE here (and gets killed) or it is
+    # never started at all.
     with LIVE_LOCK:
+        INTERRUPTED.set()
         procs = list(LIVE)
     for proc in procs:
         try:
@@ -468,7 +476,18 @@ def _run_parallel(
                             ready.append(child)
                     ready.sort()
                     continue
-                inflight[pool.submit(_task_worker, db_path, run_id, task, forced)] = tid
+                # A SIGINT sent to the process may be delivered to any thread, and
+                # the pool spawns its threads here: one taking the interrupt while
+                # blocked in Popen/communicate consumes it with nobody to act, the
+                # main thread stays in wait() and the run is waited out to the task's
+                # timeout. Block it while a worker is born so only the main thread
+                # can receive it; subprocess resets the mask in the children.
+                old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+                try:
+                    job = pool.submit(_task_worker, db_path, run_id, task, forced)
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+                inflight[job] = tid
             if not inflight:
                 continue
             done, _ = wait(inflight, return_when=FIRST_COMPLETED)
@@ -558,8 +577,53 @@ def _run_flow_locked(
 
 
 def _require_db(db_path: str) -> bool:
+    """Gate for the read-only commands: the file must be an AetherOrq database.
+
+    `connect()` runs `CREATE TABLE IF NOT EXISTS`, so calling it on someone
+    else's sqlite file would add our tables to their database and then report it
+    as an empty AetherOrq db with exit 0 — read-only commands would have written
+    (§10). Checking `sqlite_master` first is a pure read, and on our own db the
+    later DDL is a no-op.
+    """
+    # Names alone are not enough: a foreign sqlite with `runs`/`task_runs` of a
+    # different shape passed the table check, then SCHEMA's CREATE INDEX failed
+    # with a traceback *after* switching the file to WAL. Require the columns
+    # SCHEMA and the read queries need, so `connect()` is provably a no-op.
+    shape = {
+        "runs": ("run_id", "flow_name", "flow_hash", "started_at", "finished_at", "status"),
+        "task_runs": (
+            "attempt_id", "run_id", "task_id", "command_hash", "status", "attempts",
+            "exit_code", "started_at", "finished_at", "stdout", "stderr", "error",
+        ),
+    }
     if not Path(db_path).exists():
         print(f"no database at {db_path}", file=sys.stderr)
+        return False
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            for table, columns in shape.items():
+                if table not in tables:
+                    continue
+                present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if not set(columns) <= present:
+                    print(
+                        f"{db_path} is not an AetherOrq database "
+                        f"({table} has another tool's schema)",
+                        file=sys.stderr,
+                    )
+                    return False
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as exc:
+        print(f"{db_path} is not an AetherOrq database: {exc}", file=sys.stderr)
+        return False
+    if not {"runs", "task_runs"} <= tables:
+        print(f"{db_path} is not an AetherOrq database (no runs/task_runs tables)", file=sys.stderr)
         return False
     return True
 

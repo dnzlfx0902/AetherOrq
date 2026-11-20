@@ -20,10 +20,13 @@ Python 3.10+ (stdlib only; developed and tested on 3.14). No runtime dependencie
 python3 -m venv .venv && . .venv/bin/activate
 pip install .
 aether --help
+aether --version
 ```
 
-That installs the `aether` console script. From a checkout you can also run
-`python3 aether.py --help` with no install step.
+That installs the `aether` console script. `aether --version` reports the
+installed distribution's version; from a checkout `python3 aether.py --version`
+reads the number `pyproject.toml` declares instead. From a checkout you can also
+run `python3 aether.py --help` with no install step.
 
 ## Flow format
 
@@ -78,8 +81,9 @@ real end and is labelled `capture truncated`. `runs` lists each run with its
 status, task/failure counts and duration.
 
 `run` exit codes: `0` every task succeeded (or was already done), `1` at least
-one task failed/blocked, `2` invalid flow, unreadable file, or another `aether
-run` already writing that db, `130` interrupted by Ctrl-C.
+one task failed/blocked, `2` invalid flow, unreadable file, a `--db` that is not
+an AetherOrq database, or another `aether run` already writing that db, `130`
+interrupted by Ctrl-C.
 
 Each run prints one line per task:
 
@@ -142,8 +146,8 @@ secrets in flow files or in commands — they are stored in the SQLite database
 python3 -m unittest discover -s tests -v
 ```
 
-48 end-to-end tests (M0's 15, M1's 9, 7 for `--jobs`, 5 for the writer lock, 6 for
-per-task `cwd`/`env`, 6 for packaging). They drive the real CLI in subprocesses
+57 end-to-end tests (M0's 15, M1's 10, 9 for `--jobs`, 6 for the writer lock, 6 for
+per-task `cwd`/`env`, 9 for packaging, 2 for `status`). They drive the real CLI in subprocesses
 and inspect the real database: cycle rejected before execution, unknown/duplicate
 ids, shell string rejected, dependency order, failure propagation, bounded retries,
 process-tree kill on timeout, resume without re-running completed tasks across

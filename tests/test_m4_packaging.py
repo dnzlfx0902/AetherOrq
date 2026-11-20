@@ -20,6 +20,8 @@ except ModuleNotFoundError:  # pragma: no cover
 
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"
+AETHER = ROOT / "aether.py"
+CONTRACT = ROOT / "CONTRACT.md"
 OFFLINE_MARKERS = ("Network", "Temporary failure", "Connection", "ProxyError", "Could not find a version")
 
 
@@ -50,6 +52,12 @@ class PackagingMetadataTest(unittest.TestCase):
     def test_no_runtime_dependencies(self):
         self.assertEqual(self.data["project"]["dependencies"], [])
 
+    def test_contract_states_the_declared_python_floor(self):
+        """The normative document must name the floor it declares support for."""
+        floor = self.data["project"]["requires-python"].removeprefix(">=")
+        documented = re.findall(r"Python (\d+\.\d+)\+", (ROOT / "CONTRACT.md").read_text())
+        self.assertIn(floor, documented, f"CONTRACT.md states Python {documented}, pyproject declares >={floor}")
+
     def test_readme_test_count_matches_suite(self):
         """README's stated count is hand-written; keep it honest."""
         match = re.search(r"(\d+) end-to-end tests", (ROOT / "README.md").read_text())
@@ -57,6 +65,35 @@ class PackagingMetadataTest(unittest.TestCase):
             self.fail("README no longer states the suite size")
         suite = unittest.TestLoader().discover(str(ROOT / "tests"))
         self.assertEqual(int(match.group(1)), suite.countTestCases())
+
+    def test_ci_matrix_runs_every_supported_python(self):
+        """M4 acceptance: CI green on *every* supported version.
+
+        The matrix once silently lost the declared floor, so the claim is checked,
+        not trusted: the first entry must be `requires-python`'s floor and the
+        versions must be contiguous from there.
+        """
+        floor = tuple(int(part) for part in self.data["project"]["requires-python"].removeprefix(">=").split("."))
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        block = re.search(r"python-version:\s*\[([^\]]*)\]", workflow)
+        if block is None:
+            self.fail("ci.yml declares no python-version matrix")
+        versions = [tuple(int(part) for part in v.split(".")) for v in re.findall(r'"(\d+\.\d+)"', block.group(1))]
+        expected = [(floor[0], minor) for minor in range(floor[1], versions[-1][1] + 1)] if versions else []
+        self.assertEqual(versions, expected, f"ci.yml matrix {versions} must be a contiguous run from the floor {floor}")
+
+
+class ContractDocsTest(unittest.TestCase):
+    """CONTRACT.md calls itself normative, so every option the CLI accepts must
+    appear there. It documented none of the packaging surface: `--version`, the
+    `aether` console script and the supported Python floor were missing."""
+
+    def test_every_cli_option_is_documented(self):
+        options = set(re.findall(r'"(--[a-z][a-z-]*)"', AETHER.read_text()))
+        self.assertTrue(options, "no CLI options found in aether.py")
+        contract = CONTRACT.read_text()
+        missing = sorted(option for option in options if option not in contract)
+        self.assertEqual(missing, [], f"CONTRACT.md never documents {missing}")
 
 
 class CliVersionTest(unittest.TestCase):
@@ -93,10 +130,24 @@ class CleanVenvInstallTest(unittest.TestCase):
                     self.skipTest(f"build backend unreachable (offline): {detail.strip()[-300:]}")
                 self.fail(f"pip install . failed (rc={install.returncode}):\n{detail}")
 
-            for args in (["--help"], ["--version"], ["validate", str(ROOT / "examples" / "flow.json")]):
-                done = subprocess.run([aether, *args], capture_output=True, text=True, timeout=120)
+            # Run from outside the checkout: an installed command must not need it.
+            for args in (["--help"], ["validate", str(ROOT / "examples" / "flow.json")]):
+                done = subprocess.run([aether, *args], cwd=tmp, capture_output=True, text=True, timeout=120)
                 self.assertEqual(done.returncode, 0, f"aether {args} rc={done.returncode}: {done.stderr}")
-            self.assertIn("usage: aether", subprocess.run([aether, "--help"], capture_output=True, text=True).stdout)
+            help_text = subprocess.run([aether, "--help"], cwd=tmp, capture_output=True, text=True).stdout
+            self.assertIn("usage: aether", help_text)
+
+            # Distribution metadata is what the console script reports: the
+            # checkout fallback cannot help here, so "unknown" or a stale number
+            # means the installed package is misnamed or misversioned.
+            declared = re.search(r'^version = "([^"]+)"', PYPROJECT.read_text(), re.M)
+            if declared is None:
+                self.fail("pyproject.toml declares no version")
+            reported = subprocess.run(
+                [aether, "--version"], cwd=tmp, capture_output=True, text=True, timeout=120
+            )
+            self.assertEqual(reported.returncode, 0, f"aether --version rc={reported.returncode}: {reported.stderr}")
+            self.assertEqual(reported.stdout.strip(), f"aether {declared.group(1)}")
 
 
 if __name__ == "__main__":
