@@ -5,6 +5,7 @@ The metadata tests are hermetic. The install test really builds and installs the
 project into a throwaway venv (needs a network or a warm pip cache to fetch the
 build backend); it skips, with the reason, only when that backend is unreachable.
 """
+import json
 import re
 import subprocess
 import sys
@@ -148,6 +149,27 @@ class CleanVenvInstallTest(unittest.TestCase):
             )
             self.assertEqual(reported.returncode, 0, f"aether --version rc={reported.returncode}: {reported.stderr}")
             self.assertEqual(reported.stdout.strip(), f"aether {declared.group(1)}")
+
+            # `validate` only parses JSON, so an installed command that cannot
+            # execute anything would still pass. Run the shipped example for
+            # real from a foreign cwd: tasks must execute, state must land in
+            # the given db, and the artifact must appear next to it.
+            db = Path(tmp) / "installed.db"
+            ran = subprocess.run(
+                [aether, "run", str(ROOT / "examples" / "flow.json"), "--db", str(db)],
+                cwd=tmp, capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(ran.returncode, 0, f"aether run rc={ran.returncode}: {ran.stderr}")
+            self.assertTrue((Path(tmp) / "demo-artifact.txt").is_file(), ran.stdout)
+            status = subprocess.run(
+                [aether, "status", "--db", str(db), "--json"],
+                cwd=tmp, capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(status.returncode, 0, f"aether status rc={status.returncode}: {status.stderr}")
+            tasks = json.loads(status.stdout)["tasks"]
+            self.assertEqual({task["task_id"]: task["status"] for task in tasks},
+                             {"greet": "succeeded", "write_artifact": "succeeded",
+                              "verify_artifact": "succeeded"})
 
 
 if __name__ == "__main__":
