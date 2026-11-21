@@ -168,7 +168,12 @@ def validate_flow(data) -> None:
     for task in tasks:
         if not isinstance(task, dict) or not isinstance(task.get("id"), str):
             continue
-        for dep in task.get("depends_on", []):
+        deps = task.get("depends_on", [])
+        if not isinstance(deps, list):
+            continue  # already reported above; iterating it here is the crash
+        for dep in deps:
+            if not isinstance(dep, str):
+                continue  # already reported above; a dict is also unhashable
             if dep == task["id"]:
                 errors.append(f"task {task['id']!r} depends on itself")
             elif dep not in ids:
