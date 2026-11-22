@@ -97,6 +97,18 @@ class ContractDocsTest(unittest.TestCase):
         self.assertEqual(missing, [], f"CONTRACT.md never documents {missing}")
 
 
+class CiWorkflowTest(unittest.TestCase):
+    """M4: "the tag exists and its commit passes the same suite", so the tag must
+    trigger CI and CI must run that suite — the matrix check alone proves neither."""
+
+    def test_ci_runs_the_suite_and_a_v_tag_triggers_it(self):
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        self.assertIn("python3 -m unittest discover -s tests", workflow,
+                      "ci.yml never runs the suite")
+        tags = re.search(r"tags:\s*\[([^\]]*)\]", workflow)
+        self.assertTrue(tags and '"v*"' in tags.group(1), f"ci.yml never triggers on v* tags: {tags and tags.group(1)}")
+
+
 class CliVersionTest(unittest.TestCase):
     """No tomllib skip: `--version` must work on the 3.10 floor too."""
 
