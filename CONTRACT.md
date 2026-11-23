@@ -193,7 +193,9 @@ Only scheduling changes; every rule above still holds:
 - One SQLite connection per worker thread; WAL plus a 30 s busy timeout
   serialises the short writes. All state stays in the same single db file.
 - Ctrl-C kills every task in flight (each has its own process group), marks those
-  attempts `interrupted`, the run `interrupted`, and exits `130`.
+  attempts `interrupted`, the run `interrupted`, and exits `130`. It ends the run,
+  not the attempt: an interrupted attempt is **not** retried even when its task
+  declares `retries`, so signalling a run never restarts work after the kill.
 - Output lines of concurrent tasks interleave; `logs`, `runs` and `status` read
   the same rows as before.
 - `--jobs` below `1` is a usage error: exit `2`, nothing executed, no db created.
