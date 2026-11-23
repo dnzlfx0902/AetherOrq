@@ -214,6 +214,46 @@ class ParallelRunTests(FlowTestCase):
         self.assertEqual(conn.execute("SELECT status FROM runs").fetchone()[0], "interrupted")
         conn.close()
 
+    def test_interrupt_is_not_retried_even_with_retries_declared(self):
+        # CONTRACT §11: Ctrl-C ends the run, not just the attempt. A task with
+        # `retries` must not be fed back into the retry loop after the kill sweep:
+        # one attempt row, and no "retrying" line, or Ctrl-C would not stop a run
+        # that declares retries.
+        flow = self.write_flow(
+            [
+                {"id": "a", "argv": py("import pathlib, time; pathlib.Path('a.started').write_text('x'); time.sleep(20)"), "retries": 3},
+                {"id": "b", "argv": py("import pathlib, time; pathlib.Path('b.started').write_text('x'); time.sleep(20)"), "retries": 3},
+            ]
+        )
+        proc = subprocess.Popen(
+            [sys.executable, str(AETHER), "run", str(flow), "--db", str(self.db), "--jobs", "2"],
+            cwd=self.dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        # Both children must be *running* (their marker written), not merely queued,
+        # so the interrupt lands mid-attempt instead of before the spawn.
+        deadline = time.monotonic() + 20
+        started = []
+        while time.monotonic() < deadline:
+            started = [p for p in (self.dir / "a.started", self.dir / "b.started") if p.exists()]
+            if len(started) == 2:
+                break
+            time.sleep(0.05)
+        self.assertEqual(len(started), 2, "both tasks should be in flight")
+        proc.send_signal(signal.SIGINT)
+        try:
+            out, err = proc.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            self.fail("a task with retries kept the run alive after Ctrl-C")
+        self.assertEqual(proc.returncode, 130, out + err)
+        self.assertNotIn("retrying", err, f"an interrupted attempt was retried:\n{err}")
+        self.assertEqual({tid: row[1] for tid, row in self.latest().items()},
+                         {"a": 1, "b": 1}, f"each interrupted attempt must be recorded once: {self.rows()}")
+        self.assertEqual(set(self.statuses().values()), {"interrupted"})
+
     def test_interrupt_never_spawns_a_child_after_the_kill_sweep(self):
         # The shutdown only kills what is in LIVE, so a child spawned after the
         # sweep would be waited on for its whole timeout and Ctrl-C would hang.
