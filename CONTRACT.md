@@ -34,10 +34,16 @@ isolation.
   so a killed process is always visible in the database.
 - **run** — one invocation of `aether run`. One `runs` row.
 
-Statuses: `running`, `succeeded`, `failed`, `timed_out`, `interrupted`,
+Attempt statuses: `running`, `succeeded`, `failed`, `timed_out`, `interrupted`,
 `blocked`, `skipped`. `skipped` marks "not executed in this run because it had
 already succeeded with this exact command" and is *not* a new success; the
 success it refers to is the earlier `succeeded` row.
+
+One status belongs to the **run**, not to an attempt: `crashed` means the engine
+died while that run was in flight and the next invocation's recovery closed it
+(§6). An attempt never carries it — its rows become `interrupted` instead — and
+`runs` reports it verbatim, so the difference between "the engine crashed" and
+"a task failed" stays visible (§10).
 
 ## 3. Pre-execution validation (hard gate)
 
@@ -168,7 +174,9 @@ empty flow.
   attempt. A capped stream keeps its real end (§8.6) and is labelled
   `capture truncated`, so a partial tail is never mistaken for the full output.
 - `runs --db DB` lists every run with status, task/success/failure counts and
-  duration; a run still in flight has no duration.
+  duration; a run still in flight has no duration. A run whose engine was killed
+  is shown as `crashed` once the next invocation recovered it (§2, §6), so the
+  run-level cause is never mistaken for a task failure.
 - `status` and `runs` accept `--json`; the JSON is a single object
   (`{"tasks": [...], "runs": n}` and `{"runs": [...]}`) and parses with
   `json.loads`.
