@@ -337,6 +337,7 @@ class ResumeTests(FlowTestCase):
         proc.stderr.close()
         conn = sqlite3.connect(self.db)
         self.assertEqual(conn.execute("SELECT status FROM task_runs").fetchone()[0], "running")
+        self.assertEqual(conn.execute("SELECT status FROM runs").fetchone()[0], "running")
         conn.close()
 
         go.touch()
@@ -345,6 +346,17 @@ class ResumeTests(FlowTestCase):
         self.assertIn("recovered 1 interrupted attempt", res.stderr)
         self.assertIn("interrupted", [s for _, s, _, _ in self.rows()])
         self.assertEqual(self.latest()["job"][0], "succeeded")
+
+        # §2/§6: the run row of a killed engine becomes `crashed` at recovery —
+        # an attempt becomes `interrupted`, a whole run never becomes `failed` —
+        # and §10 requires `runs` to surface that state verbatim.
+        conn = sqlite3.connect(self.db)
+        self.assertEqual([r[0] for r in conn.execute("SELECT status FROM runs ORDER BY run_id")],
+                         ["crashed", "succeeded"])
+        conn.close()
+        listed = self.cli("runs", "--db", str(self.db))
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn("crashed", listed.stdout)
 
     def test_status_subcommand_reports_latest_state(self):
         flow = self.write_flow([{"id": "a", "argv": py("pass")}])
