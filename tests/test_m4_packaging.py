@@ -108,6 +108,17 @@ class CiWorkflowTest(unittest.TestCase):
         tags = re.search(r"tags:\s*\[([^\]]*)\]", workflow)
         self.assertTrue(tags and '"v*"' in tags.group(1), f"ci.yml never triggers on v* tags: {tags and tags.group(1)}")
 
+    def test_ci_installs_the_project_and_runs_the_console_script(self):
+        """The matrix only proves the checkout passes. M4 also claims `pip install .`
+        yields a working `aether`, and the suite's install test may skip offline, so
+        CI itself must install the project and invoke the installed script."""
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        install = workflow.find("pip install .")
+        script = workflow.find("aether --version")
+        self.assertNotEqual(install, -1, "ci.yml never installs the project")
+        self.assertNotEqual(script, -1, "ci.yml never runs the installed aether")
+        self.assertLess(install, script, "the console-script check must come after the install")
+
 
 class CliVersionTest(unittest.TestCase):
     """No tomllib skip: `--version` must work on the 3.10 floor too."""
