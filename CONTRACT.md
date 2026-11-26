@@ -258,3 +258,8 @@ minor from that floor upwards.
   report a stale version. It opens no database and takes no other option.
 - `--version` is read-only like `status`, `logs` and `runs` (§8.2, §10): it never
   takes the writer lock and works while a `run` holds it.
+- The installed console script is the same entry point as `python3 aether.py`:
+  every exit code in this document (`1` failed run, `2` invalid flow or usage,
+  `130` interrupt) surfaces unchanged through `aether`, so a refused flow cannot
+  be mistaken for a success by a caller. A flow rejected at validation (§3)
+  still runs nothing and creates no database through the installed command.

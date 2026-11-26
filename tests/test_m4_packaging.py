@@ -194,6 +194,24 @@ class CleanVenvInstallTest(unittest.TestCase):
                              {"greet": "succeeded", "write_artifact": "succeeded",
                               "verify_artifact": "succeeded"})
 
+            # Every non-zero exit path is exercised through `python3 aether.py`
+            # and CI only asserts `aether --version` rc=0, so nothing proved the
+            # generated console script forwards main()'s return value: an entry
+            # point that returned None would report success for a refused flow
+            # (CONTRACT §3, §13). The refused flow must also write no db.
+            bad = Path(tmp) / "invalid.json"
+            bad.write_text(json.dumps({"name": "bad", "tasks": [
+                {"id": "a", "argv": ["true"], "depends_on": ["a"]}]}))
+            refused_db = Path(tmp) / "refused.db"
+            refused = subprocess.run(
+                [aether, "run", str(bad), "--db", str(refused_db)],
+                cwd=tmp, capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(refused.returncode, 2,
+                             f"installed aether run on an invalid flow rc={refused.returncode}: {refused.stderr}")
+            self.assertIn("depends on itself", refused.stderr)
+            self.assertFalse(refused_db.exists(), "an invalid flow must not create a db")
+
 
 if __name__ == "__main__":
     unittest.main()
