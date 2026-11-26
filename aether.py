@@ -581,6 +581,19 @@ def _run_flow_locked(
     return 1 if failed else 0
 
 
+# Names alone are not enough: a foreign sqlite with `runs`/`task_runs` of a
+# different shape passes a table check, then SCHEMA's CREATE INDEX fails with a
+# traceback *after* switching the file to WAL. Require the columns SCHEMA and the
+# read queries need, so `connect()` on our own db is provably a no-op.
+_DB_SHAPE = {
+    "runs": ("run_id", "flow_name", "flow_hash", "started_at", "finished_at", "status"),
+    "task_runs": (
+        "attempt_id", "run_id", "task_id", "command_hash", "status", "attempts",
+        "exit_code", "started_at", "finished_at", "stdout", "stderr", "error",
+    ),
+}
+
+
 def _require_db(db_path: str) -> bool:
     """Gate for the read-only commands: the file must be an AetherOrq database.
 
@@ -590,17 +603,7 @@ def _require_db(db_path: str) -> bool:
     (§10). Checking `sqlite_master` first is a pure read, and on our own db the
     later DDL is a no-op.
     """
-    # Names alone are not enough: a foreign sqlite with `runs`/`task_runs` of a
-    # different shape passed the table check, then SCHEMA's CREATE INDEX failed
-    # with a traceback *after* switching the file to WAL. Require the columns
-    # SCHEMA and the read queries need, so `connect()` is provably a no-op.
-    shape = {
-        "runs": ("run_id", "flow_name", "flow_hash", "started_at", "finished_at", "status"),
-        "task_runs": (
-            "attempt_id", "run_id", "task_id", "command_hash", "status", "attempts",
-            "exit_code", "started_at", "finished_at", "stdout", "stderr", "error",
-        ),
-    }
+    shape = _DB_SHAPE
     if not Path(db_path).exists():
         print(f"no database at {db_path}", file=sys.stderr)
         return False
@@ -631,6 +634,43 @@ def _require_db(db_path: str) -> bool:
         print(f"{db_path} is not an AetherOrq database (no runs/task_runs tables)", file=sys.stderr)
         return False
     return True
+
+
+def _foreign_db_reason(db_path: str) -> str:
+    """Why `run` must refuse this `--db` ('' = usable).
+
+    A missing or zero-byte file is a fresh database — `connect()` creates the
+    schema there, which is the ordinary first run. So is an existing sqlite file
+    with no tables at all. An existing file that is not sqlite, or that already
+    holds other tables (another tool's `runs`/`task_runs` included), is refused
+    *before* any task executes: `run` executes commands and writes, so unlike the
+    read-only gate it would add our tables to somebody else's db and exit 0
+    (README: exit `2` for a `--db` that is not an AetherOrq database).
+    """
+    if not Path(db_path).exists() or Path(db_path).stat().st_size == 0:
+        return ""
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            if not tables:
+                return ""                       # empty sqlite: nothing to damage
+            for table, columns in _DB_SHAPE.items():
+                if table not in tables:
+                    continue
+                present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if not set(columns) <= present:
+                    return f"{db_path} is not an AetherOrq database ({table} has another tool's schema)"
+            if not set(_DB_SHAPE) <= tables:
+                return f"{db_path} is not an AetherOrq database (no runs/task_runs tables)"
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as exc:
+        return f"{db_path} is not an AetherOrq database: {exc}"
+    return ""
 
 
 def _emitted(row) -> dict:
@@ -855,6 +895,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ok: {flow['name']} ({len(flow['tasks'])} tasks)")
         return 0
     db_path = args.db or str(Path(args.flow).with_suffix(".db"))
+    motivo = _foreign_db_reason(db_path)
+    if motivo:
+        print(motivo, file=sys.stderr)
+        return 2
     try:
         return run_flow(flow, db_path, set(args.force_task), args.jobs)
     except LockHeld as exc:
