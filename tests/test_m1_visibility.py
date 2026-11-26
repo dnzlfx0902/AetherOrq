@@ -183,5 +183,76 @@ class ReadOnlyCommandsNeverWriteTests(FlowTestCase):
         self.assertEqual(junk.read_text(encoding="utf-8"), "not a database\n")
 
 
+class RunRefusesAForeignDbTests(FlowTestCase):
+    """README: `run` exits `2` when `--db` is not an AetherOrq database.
+
+    `run` executes commands and writes, so pointing it at somebody else's sqlite
+    file did not merely misread it: the tasks ran and `runs`/`task_runs` were
+    added to that file, with exit 0.
+    """
+
+    def foreign_db(self):
+        other = self.dir / "other.db"
+        conn = sqlite3.connect(other)
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO users (name) VALUES ('keep me')")
+        conn.commit()
+        conn.close()
+        return other
+
+    def test_foreign_db_is_refused_before_anything_runs(self):
+        other = self.foreign_db()
+        before = other.read_bytes()
+        marker = self.dir / "executed"
+        flow = self.write_flow([{"id": "job", "argv": py(f"open({str(marker)!r}, 'w').close()")}])
+
+        res = self.cli("run", str(flow), "--db", str(other))
+        self.assertEqual(res.returncode, 2, f"rc={res.returncode}: {res.stderr}")
+        self.assertIn("is not an AetherOrq database", res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertFalse(marker.exists(), "a refused run must execute nothing")
+        self.assertEqual(other.read_bytes(), before, "a refused run must not modify the file")
+        conn = sqlite3.connect(other)
+        try:
+            names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            conn.close()
+        self.assertEqual(names, {"users"}, f"foreign schema was modified: {sorted(names)}")
+
+    def test_foreign_db_with_lookalike_tables_is_refused(self):
+        other = self.dir / "lookalike.db"
+        conn = sqlite3.connect(other)
+        conn.executescript(
+            "CREATE TABLE runs (rid INTEGER PRIMARY KEY);"
+            "CREATE TABLE task_runs (tid INTEGER PRIMARY KEY);"
+        )
+        conn.close()
+        flow = self.write_flow([{"id": "job", "argv": py("pass")}])
+        res = self.cli("run", str(flow), "--db", str(other))
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("is not an AetherOrq database", res.stderr)
+
+    def test_non_sqlite_file_is_refused_without_a_traceback(self):
+        junk = self.dir / "notes.txt"
+        junk.write_text("not a database\n", encoding="utf-8")
+        flow = self.write_flow([{"id": "job", "argv": py("pass")}])
+        res = self.cli("run", str(flow), "--db", str(junk))
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("is not an AetherOrq database", res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertEqual(junk.read_text(encoding="utf-8"), "not a database\n")
+
+    def test_a_new_or_empty_db_still_runs(self):
+        """The gate must not block the ordinary first run on a fresh file."""
+        flow = self.write_flow([{"id": "job", "argv": py("pass")}])
+        fresh = self.dir / "fresh.db"
+        res = self.cli("run", str(flow), "--db", str(fresh))
+        self.assertEqual(res.returncode, 0, f"new db rc={res.returncode}: {res.stderr}")
+        empty = self.dir / "empty.db"
+        empty.write_bytes(b"")
+        res = self.cli("run", str(flow), "--db", str(empty))
+        self.assertEqual(res.returncode, 0, f"empty db rc={res.returncode}: {res.stderr}")
+
+
 if __name__ == "__main__":
     unittest.main()
