@@ -96,6 +96,16 @@ class ContractDocsTest(unittest.TestCase):
         missing = sorted(option for option in options if option not in contract)
         self.assertEqual(missing, [], f"CONTRACT.md never documents {missing}")
 
+    def test_contract_documents_the_run_side_foreign_db_gate(self):
+        """§8.1 is normative for `run`. The refusal was implemented and pinned by
+        tests, but the contract described the gate only for read-only commands
+        (§10), so the documented invariants were wider than the code."""
+        invariants = CONTRACT.read_text().split("## 8.")[1].split("## 9.")[0]
+        self.assertIn("`run` refuses a `--db`", invariants,
+                      "§8 never states that `run` refuses a foreign --db")
+        self.assertIn("is not an AetherOrq database", invariants)
+        self.assertIn("Exit `2`", invariants)
+
 
 class CiWorkflowTest(unittest.TestCase):
     """M4: "the tag exists and its commit passes the same suite", so the tag must

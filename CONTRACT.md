@@ -135,7 +135,16 @@ engine deliberately does not guess whether a downstream result is still valid.
 ## 8. Invariants for operators / sysadmin
 
 1. One database per flow. Two different flows sharing a `--db` file would mix
-   history; recovery and `status` are db-wide. Not supported in M0.
+   history; recovery and `status` are db-wide, so it is not supported. This is
+   enforced, not advised: before any process starts, `run` refuses a `--db` that
+   is not an AetherOrq database — a non-sqlite file, a sqlite file holding other
+   tools' tables, or one whose `runs`/`task_runs` lack our columns (table names
+   alone do not make it ours; §10's read-only gate applies the same test).
+   Exit `2`, zero commands executed, and the file is left byte-for-byte
+   unchanged: no schema and no `<db>.lock` is added. A missing, zero-byte or
+   empty-sqlite file is a fresh database and runs normally. Order is validation
+   (§3) first, then this gate, then the writer lock (§8.2), so a refused flow or
+   a refused `--db` never takes the lock.
 2. Single writer, enforced. `aether run` takes an exclusive `flock` on
    `<db>.lock` before it opens the db. A second `aether run` on the same db exits
    `2` with a clear error and touches no state (§11). The kernel drops the lock
