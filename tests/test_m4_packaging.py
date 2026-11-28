@@ -5,6 +5,7 @@ The metadata tests are hermetic. The install test really builds and installs the
 project into a throwaway venv (needs a network or a warm pip cache to fetch the
 build backend); it skips, with the reason, only when that backend is unreachable.
 """
+import fnmatch
 import json
 import re
 import subprocess
@@ -82,6 +83,25 @@ class PackagingMetadataTest(unittest.TestCase):
         versions = [tuple(int(part) for part in v.split(".")) for v in re.findall(r'"(\d+\.\d+)"', block.group(1))]
         expected = [(floor[0], minor) for minor in range(floor[1], versions[-1][1] + 1)] if versions else []
         self.assertEqual(versions, expected, f"ci.yml matrix {versions} must be a contiguous run from the floor {floor}")
+
+
+class SdistContentsTest(unittest.TestCase):
+    """M4 ships an sdist, and it carries `tests/`, so that suite must be runnable.
+
+    It was not: setuptools' defaults shipped the tests but not the files they
+    read, so `python3 -m unittest discover -s tests` inside the unpacked
+    tarball failed on `CONTRACT.md`, the example flow and `ci.yml` — a v1.0
+    release artifact that cannot verify itself. Pin the manifest instead.
+    """
+
+    def test_manifest_ships_every_file_the_suite_reads(self):
+        rules = [line for line in (ROOT / "MANIFEST.in").read_text().splitlines()
+                 if line.strip() and not line.startswith("#") and line.split()[0] == "include"]
+        patterns = [pattern for rule in rules for pattern in rule.split()[1:]]
+        needed = ["CONTRACT.md", "examples/flow.json", ".github/workflows/ci.yml"]
+        missing = [path for path in needed
+                   if not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)]
+        self.assertEqual(missing, [], f"MANIFEST.in never ships {missing}")
 
 
 class ContractDocsTest(unittest.TestCase):
